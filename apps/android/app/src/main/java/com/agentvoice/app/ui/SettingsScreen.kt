@@ -27,13 +27,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.agentvoice.app.model.AgentMode
 import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.viewmodel.MainUiState
 
@@ -44,6 +48,14 @@ fun SettingsScreen(
     onBackendUrlChange: (String) -> Unit,
     onSaveBackendUrl: () -> Unit,
     onTestConnection: () -> Unit,
+    onSendMockTestPrompt: () -> Unit,
+    onSendOpenClawTestPrompt: () -> Unit,
+    onShowDrivingNotification: () -> Unit,
+    onHideDrivingNotification: () -> Unit,
+    onStartInDrivingModeToggle: (Boolean) -> Unit,
+    onKeepScreenAwakeToggle: (Boolean) -> Unit,
+    onDrivingAutoSpeakToggle: (Boolean) -> Unit,
+    onDrivingModeSelected: (AgentMode) -> Unit,
     onAgentSelected: (ConnectorType) -> Unit,
     onClearHistory: () -> Unit,
     onBack: () -> Unit,
@@ -121,8 +133,87 @@ fun SettingsScreen(
                 onAgentSelected = onAgentSelected
             )
 
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Test prompts", fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = onSendMockTestPrompt,
+                        enabled = !uiState.isLoading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Mock")
+                    }
+                    OutlinedButton(
+                        onClick = onSendOpenClawTestPrompt,
+                        enabled = !uiState.isLoading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("OpenClaw")
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Driving shortcuts", fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = onShowDrivingNotification,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Show")
+                    }
+                    OutlinedButton(
+                        onClick = onHideDrivingNotification,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Hide")
+                    }
+                }
+                uiState.shortcutStatusMessage?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Driving behavior", fontWeight = FontWeight.SemiBold)
+                SettingSwitch(
+                    label = "Start in Driving mode",
+                    checked = uiState.startInDrivingMode,
+                    onCheckedChange = onStartInDrivingModeToggle
+                )
+                SettingSwitch(
+                    label = "Keep screen awake",
+                    checked = uiState.keepScreenAwakeInDrivingMode,
+                    onCheckedChange = onKeepScreenAwakeToggle
+                )
+                SettingSwitch(
+                    label = "Auto-read replies",
+                    checked = uiState.drivingAutoSpeak,
+                    onCheckedChange = onDrivingAutoSpeakToggle
+                )
+            }
+
+            DrivingModeSelector(
+                selectedMode = uiState.drivingMode,
+                onDrivingModeSelected = onDrivingModeSelected
+            )
+
             SettingValue("Default mode", uiState.mode.label)
             SettingValue("TTS", if (uiState.ttsEnabled) "enabled" else "disabled")
+            SettingValue("App version", uiState.appVersion)
+            SettingValue("Last connector", uiState.lastConnector?.label ?: "none")
+            SettingValue("Last request", uiState.lastRequestId ?: "none")
+            SettingValue("Last error", uiState.lastErrorMessage ?: "none")
 
             Button(
                 onClick = onClearHistory,
@@ -141,6 +232,50 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun DrivingModeSelector(
+    selectedMode: AgentMode,
+    onDrivingModeSelected: (AgentMode) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Driving mode default", fontWeight = FontWeight.SemiBold)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(
+                AgentMode.Mobile,
+                AgentMode.CaptureOnly,
+                AgentMode.ReviewRequired,
+                AgentMode.Normal
+            ).forEach { mode ->
+                FilterChip(
+                    selected = selectedMode == mode,
+                    onClick = { onDrivingModeSelected(mode) },
+                    label = { Text(mode.label) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitch(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -174,11 +309,21 @@ private fun SettingValue(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, fontWeight = FontWeight.SemiBold)
+        Text(
+            label,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f)
+        )
         Text(
             value,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp)
         )
     }
 }

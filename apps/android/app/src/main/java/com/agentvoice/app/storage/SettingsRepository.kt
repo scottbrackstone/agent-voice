@@ -16,7 +16,11 @@ data class AppSettings(
     val backendUrl: String = SettingsRepository.DEFAULT_BACKEND_URL,
     val selectedAgent: ConnectorType = ConnectorType.Mock,
     val defaultMode: AgentMode = AgentMode.Normal,
-    val ttsEnabled: Boolean = true
+    val ttsEnabled: Boolean = true,
+    val startInDrivingMode: Boolean = false,
+    val keepScreenAwakeInDrivingMode: Boolean = true,
+    val drivingAutoSpeak: Boolean = true,
+    val drivingMode: AgentMode = AgentMode.Mobile
 )
 
 class SettingsRepository(private val context: Context) {
@@ -29,7 +33,13 @@ class SettingsRepository(private val context: Context) {
             defaultMode = AgentMode.fromWireValue(
                 preferences[DEFAULT_MODE] ?: AgentMode.Normal.wireValue
             ),
-            ttsEnabled = preferences[TTS_ENABLED] ?: true
+            ttsEnabled = preferences[TTS_ENABLED] ?: true,
+            startInDrivingMode = preferences[START_IN_DRIVING_MODE] ?: false,
+            keepScreenAwakeInDrivingMode = preferences[KEEP_SCREEN_AWAKE_IN_DRIVING_MODE] ?: true,
+            drivingAutoSpeak = preferences[DRIVING_AUTO_SPEAK] ?: true,
+            drivingMode = AgentMode.fromWireValue(
+                preferences[DRIVING_MODE] ?: AgentMode.Mobile.wireValue
+            )
         )
     }
 
@@ -57,6 +67,30 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    suspend fun setStartInDrivingMode(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[START_IN_DRIVING_MODE] = enabled
+        }
+    }
+
+    suspend fun setKeepScreenAwakeInDrivingMode(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEEP_SCREEN_AWAKE_IN_DRIVING_MODE] = enabled
+        }
+    }
+
+    suspend fun setDrivingAutoSpeak(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[DRIVING_AUTO_SPEAK] = enabled
+        }
+    }
+
+    suspend fun setDrivingMode(mode: AgentMode) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[DRIVING_MODE] = mode.wireValue
+        }
+    }
+
     companion object {
         const val DEFAULT_BACKEND_URL = "http://10.0.2.2:3001"
 
@@ -64,5 +98,10 @@ class SettingsRepository(private val context: Context) {
         private val SELECTED_AGENT = stringPreferencesKey("selected_agent")
         private val DEFAULT_MODE = stringPreferencesKey("default_mode")
         private val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
+        private val START_IN_DRIVING_MODE = booleanPreferencesKey("start_in_driving_mode")
+        private val KEEP_SCREEN_AWAKE_IN_DRIVING_MODE =
+            booleanPreferencesKey("keep_screen_awake_in_driving_mode")
+        private val DRIVING_AUTO_SPEAK = booleanPreferencesKey("driving_auto_speak")
+        private val DRIVING_MODE = stringPreferencesKey("driving_mode")
     }
 }

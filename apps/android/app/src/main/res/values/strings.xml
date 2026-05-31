@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">AgentVoice</string>
+    <string name="quick_settings_tile_label">Jynx</string>
+    <string name="shortcut_talk_short_label">Talk</string>
+    <string name="shortcut_talk_long_label">Talk to Jynx</string>
+    <string name="shortcut_driving_short_label">Driving</string>
+    <string name="shortcut_driving_long_label">Open Driving mode</string>
 </resources>
 

@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { AgentConnector } from "../connectors/AgentConnector.js";
-import { AgentMessageRequestSchema, type AgentName } from "../types/agent.js";
+import { buildCaptureOnlyAction } from "../safety/modeRules.js";
+import {
+  AgentMessageRequestSchema,
+  type AgentMessageRequest,
+  type AgentName,
+  type AgentResponse
+} from "../types/agent.js";
 import { createRequestId } from "../utils/requestId.js";
 
 type ConnectorRegistry = Partial<Record<AgentName, AgentConnector>>;
@@ -19,6 +25,10 @@ export function registerMessageRoute(server: FastifyInstance, connectors: Connec
           message: issue.message
         }))
       });
+    }
+
+    if (parsed.data.mode === "capture_only") {
+      return reply.send(buildCaptureOnlyResponse(parsed.data, requestId));
     }
 
     const connector = connectors[parsed.data.agent];
@@ -42,5 +52,24 @@ export function registerMessageRoute(server: FastifyInstance, connectors: Connec
 
     return reply.send(response);
   });
+}
+
+function buildCaptureOnlyResponse(
+  request: AgentMessageRequest,
+  requestId: string
+): AgentResponse {
+  const queuedAction = buildCaptureOnlyAction(request.message, () => `${requestId}_capture`);
+
+  return {
+    reply: "Captured for later review.",
+    status: "queued",
+    mode: "capture_only",
+    queuedActions: [queuedAction],
+    warnings: [
+      `Capture-only mode did not call the ${request.agent} connector.`
+    ],
+    connector: "relay",
+    requestId
+  };
 }
 

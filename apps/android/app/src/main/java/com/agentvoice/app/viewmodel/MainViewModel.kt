@@ -1,6 +1,7 @@
 package com.agentvoice.app.viewmodel
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentvoice.app.model.AgentMode
@@ -27,15 +28,29 @@ data class MainUiState(
     val queuedActions: List<QueuedAction> = emptyList(),
     val warnings: List<String> = emptyList(),
     val errorMessage: String? = null,
+    val lastRequestId: String? = null,
+    val lastConnector: ConnectorType? = null,
+    val lastErrorMessage: String? = null,
     val connectionTestMessage: String? = null,
     val connectionTestSucceeded: Boolean? = null,
+    val shortcutStatusMessage: String? = null,
     val ttsEnabled: Boolean = true,
+    val startInDrivingMode: Boolean = false,
+    val keepScreenAwakeInDrivingMode: Boolean = true,
+    val drivingAutoSpeak: Boolean = true,
+    val drivingMode: AgentMode = AgentMode.Mobile,
+    val isHandsFreeSessionActive: Boolean = false,
+    val isSpeaking: Boolean = false,
+    val handsFreeTurns: Int = 0,
+    val handsFreeSessionStatus: String? = null,
     val recentHistory: List<ConversationRecord> = emptyList(),
     val selectedHistory: ConversationRecord? = null,
     val backendUrl: String = SettingsRepository.DEFAULT_BACKEND_URL,
     val backendUrlDraft: String = SettingsRepository.DEFAULT_BACKEND_URL,
     val selectedAgent: ConnectorType = ConnectorType.Mock,
     val showSettings: Boolean = false,
+    val isDrivingMode: Boolean = false,
+    val appVersion: String = "unknown",
     val lastTranscript: String? = null
 ) {
     val canRetry: Boolean
@@ -45,27 +60,41 @@ data class MainUiState(
         get() = !isLoading && !isListening && typedMessage.isNotBlank()
 
     val canSpeakAgain: Boolean
-        get() = !isLoading && ttsEnabled && agentReply.isNotBlank()
+        get() = !isLoading &&
+            agentReply.isNotBlank() &&
+            (ttsEnabled || (isDrivingMode && drivingAutoSpeak))
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsRepository = SettingsRepository(application.applicationContext)
     private val conversationRepository = ConversationRepository(application.applicationContext)
     private val relayClient = RelayClient()
+    private var appliedInitialDrivingMode = false
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
 
     init {
+        _uiState.update { it.copy(appVersion = resolveAppVersion(application)) }
+
         viewModelScope.launch {
             settingsRepository.settings.collect { settings ->
+                val shouldOpenDrivingMode =
+                    !appliedInitialDrivingMode && settings.startInDrivingMode
+                appliedInitialDrivingMode = true
+
                 _uiState.update {
                     it.copy(
                         backendUrl = settings.backendUrl,
                         backendUrlDraft = settings.backendUrl,
                         selectedAgent = settings.selectedAgent,
                         mode = settings.defaultMode,
-                        ttsEnabled = settings.ttsEnabled
+                        ttsEnabled = settings.ttsEnabled,
+                        startInDrivingMode = settings.startInDrivingMode,
+                        keepScreenAwakeInDrivingMode = settings.keepScreenAwakeInDrivingMode,
+                        drivingAutoSpeak = settings.drivingAutoSpeak,
+                        drivingMode = settings.drivingMode,
+                        isDrivingMode = it.isDrivingMode || shouldOpenDrivingMode
                     )
                 }
             }
@@ -96,7 +125,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 isListening = true,
+                isSpeaking = false,
                 errorMessage = null,
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Listening"
+                } else {
+                    it.handsFreeSessionStatus
+                },
                 connectionStatus = "Listening"
             )
         }
@@ -123,10 +158,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         submitTranscript(_uiState.value.typedMessage, speak, clearTypedMessage = true)
     }
 
+    fun sendTestPrompt(agent: ConnectorType, speak: (String) -> Unit) {
+        submitTranscript(
+            transcript = "Reply with one short sentence confirming AgentVoice can reach you.",
+            speak = speak,
+            agentOverride = agent,
+            modeOverride = AgentMode.Normal
+        )
+    }
+
     private fun submitTranscript(
         transcript: String,
         speak: (String) -> Unit,
-        clearTypedMessage: Boolean = false
+        clearTypedMessage: Boolean = false,
+        agentOverride: ConnectorType? = null,
+        modeOverride: AgentMode? = null
     ) {
         val trimmedTranscript = transcript.trim()
         if (trimmedTranscript.isBlank()) {
@@ -135,6 +181,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val snapshot = _uiState.value
+        val agent = agentOverride ?: snapshot.selectedAgent
+        val mode = modeOverride ?: if (snapshot.isDrivingMode) {
+            snapshot.drivingMode
+        } else {
+            snapshot.mode
+        }
         _uiState.update {
             it.copy(
                 isListening = false,
@@ -146,6 +198,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = null,
                 lastTranscript = trimmedTranscript,
                 typedMessage = if (clearTypedMessage) "" else it.typedMessage,
+                lastErrorMessage = null,
                 connectionStatus = "Sending to relay"
             )
         }
@@ -154,9 +207,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             relayClient
                 .sendMessage(
                     backendUrl = snapshot.backendUrl,
-                    agent = snapshot.selectedAgent,
+                    agent = agent,
                     message = trimmedTranscript,
-                    mode = snapshot.mode
+                    mode = mode
                 )
                 .onSuccess { response ->
                     conversationRepository.saveResponse(trimmedTranscript, response)
@@ -168,11 +221,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             queuedActions = response.queuedActions,
                             warnings = response.warnings,
                             errorMessage = null,
+                            lastRequestId = response.requestId,
+                            lastConnector = response.connector,
+                            lastErrorMessage = null,
+                            handsFreeTurns = if (it.isHandsFreeSessionActive) {
+                                it.handsFreeTurns + 1
+                            } else {
+                                it.handsFreeTurns
+                            },
+                            handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                                "Reply received"
+                            } else {
+                                it.handsFreeSessionStatus
+                            },
                             mode = response.mode
                         )
                     }
 
-                    if (_uiState.value.ttsEnabled) {
+                    val latestState = _uiState.value
+                    if (
+                        latestState.ttsEnabled ||
+                        (latestState.isDrivingMode && latestState.drivingAutoSpeak) ||
+                        latestState.isHandsFreeSessionActive
+                    ) {
                         speak(response.reply)
                     }
                 }
@@ -180,15 +251,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val message = error.message ?: "Unable to reach AgentVoice relay."
                     conversationRepository.saveFailure(
                         transcript = trimmedTranscript,
-                        mode = snapshot.mode,
-                        connector = snapshot.selectedAgent,
+                        mode = mode,
+                        connector = agent,
                         error = message
                     )
                     _uiState.update {
                         it.copy(
                             isLoading = false,
                             connectionStatus = "Relay error",
-                            errorMessage = message
+                            errorMessage = message,
+                            lastErrorMessage = message,
+                            isHandsFreeSessionActive = false,
+                            handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                                "Stopped after relay error"
+                            } else {
+                                it.handsFreeSessionStatus
+                            }
                         )
                     }
                 }
@@ -206,7 +284,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isListening = false,
                 isLoading = false,
                 connectionStatus = "Microphone permission denied",
-                errorMessage = "Microphone permission is needed to use push-to-talk."
+                errorMessage = "Microphone permission is needed to use push-to-talk.",
+                isHandsFreeSessionActive = false,
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Stopped after permission denial"
+                } else {
+                    it.handsFreeSessionStatus
+                }
             )
         }
     }
@@ -217,7 +301,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isListening = false,
                 isLoading = false,
                 connectionStatus = "Speech input error",
-                errorMessage = message
+                errorMessage = message,
+                isHandsFreeSessionActive = false,
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Stopped after speech error"
+                } else {
+                    it.handsFreeSessionStatus
+                }
             )
         }
     }
@@ -226,6 +316,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(ttsEnabled = enabled) }
         viewModelScope.launch {
             settingsRepository.setTtsEnabled(enabled)
+        }
+    }
+
+    fun setStartInDrivingMode(enabled: Boolean) {
+        _uiState.update { it.copy(startInDrivingMode = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setStartInDrivingMode(enabled)
+        }
+    }
+
+    fun setKeepScreenAwakeInDrivingMode(enabled: Boolean) {
+        _uiState.update { it.copy(keepScreenAwakeInDrivingMode = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setKeepScreenAwakeInDrivingMode(enabled)
+        }
+    }
+
+    fun setDrivingAutoSpeak(enabled: Boolean) {
+        _uiState.update { it.copy(drivingAutoSpeak = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setDrivingAutoSpeak(enabled)
+        }
+    }
+
+    fun setDrivingMode(mode: AgentMode) {
+        _uiState.update { it.copy(drivingMode = mode) }
+        viewModelScope.launch {
+            settingsRepository.setDrivingMode(mode)
         }
     }
 
@@ -295,6 +413,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             connectionStatus = "Relay reachable",
                             connectionTestMessage = message,
                             connectionTestSucceeded = true,
+                            shortcutStatusMessage = null,
                             errorMessage = null
                         )
                     }
@@ -350,8 +469,121 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(showSettings = false) }
     }
 
+    fun openDrivingMode() {
+        _uiState.update { it.copy(isDrivingMode = true, showSettings = false) }
+    }
+
+    fun closeDrivingMode() {
+        _uiState.update {
+            it.copy(
+                isDrivingMode = false,
+                isHandsFreeSessionActive = false,
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Stopped"
+                } else {
+                    it.handsFreeSessionStatus
+                }
+            )
+        }
+    }
+
+    fun startHandsFreeSession() {
+        _uiState.update {
+            it.copy(
+                isDrivingMode = true,
+                showSettings = false,
+                isHandsFreeSessionActive = true,
+                handsFreeTurns = 0,
+                handsFreeSessionStatus = "Starting"
+            )
+        }
+    }
+
+    fun stopHandsFreeSession(reason: String = "Stopped") {
+        _uiState.update {
+            it.copy(
+                isHandsFreeSessionActive = false,
+                isListening = false,
+                isSpeaking = false,
+                handsFreeSessionStatus = reason
+            )
+        }
+    }
+
+    fun onSpeakingStarted() {
+        _uiState.update {
+            it.copy(
+                isSpeaking = true,
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Jynx is speaking"
+                } else {
+                    it.handsFreeSessionStatus
+                }
+            )
+        }
+    }
+
+    fun onSpeakingFinished() {
+        _uiState.update {
+            it.copy(
+                isSpeaking = false,
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Preparing to listen"
+                } else {
+                    it.handsFreeSessionStatus
+                }
+            )
+        }
+    }
+
+    fun onHandsFreeWaitingForNextTurn() {
+        _uiState.update {
+            if (it.isHandsFreeSessionActive) {
+                it.copy(handsFreeSessionStatus = "Ready for next turn")
+            } else {
+                it
+            }
+        }
+    }
+
+    fun onShortcutNotificationShown() {
+        _uiState.update {
+            it.copy(shortcutStatusMessage = "Driving shortcut notification is on.")
+        }
+    }
+
+    fun onShortcutNotificationHidden() {
+        _uiState.update {
+            it.copy(shortcutStatusMessage = "Driving shortcut notification is off.")
+        }
+    }
+
+    fun onNotificationPermissionDenied() {
+        _uiState.update {
+            it.copy(shortcutStatusMessage = "Notification permission is needed for the driving shortcut.")
+        }
+    }
+
     override fun onCleared() {
         relayClient.close()
         super.onCleared()
+    }
+
+    private fun resolveAppVersion(application: Application): String {
+        return try {
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                application.packageManager.getPackageInfo(
+                    application.packageName,
+                    android.content.pm.PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                application.packageManager.getPackageInfo(application.packageName, 0)
+            }
+
+            packageInfo.versionName ?: "unknown"
+        } catch (_: Exception) {
+            "unknown"
+        }
     }
 }

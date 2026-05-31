@@ -24,9 +24,20 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.net.URI
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 
 class RelayClient(
-    private val client: HttpClient = HttpClient(OkHttp)
+    private val client: HttpClient = HttpClient(OkHttp) {
+        engine {
+            config {
+                retryOnConnectionFailure(true)
+                connectTimeout(12, TimeUnit.SECONDS)
+                readTimeout(45, TimeUnit.SECONDS)
+                writeTimeout(30, TimeUnit.SECONDS)
+            }
+        }
+    }
 ) {
     suspend fun sendMessage(
         backendUrl: String,
@@ -36,7 +47,7 @@ class RelayClient(
     ): Result<AgentResponse> {
         return try {
             Result.success(
-                withTimeout(15_000) {
+                withTimeout(SEND_TIMEOUT_MS) {
                     val baseUrl = normalizeBackendUrl(backendUrl)
                     val requestBody = JSONObject()
                         .put("agent", agent.value)
@@ -174,11 +185,20 @@ class RelayClient(
     }
 
     private fun toRelayError(error: Exception): Exception =
-        if (error is RelayClientException) {
-            error
-        } else {
-            RelayClientException(error.message ?: "Unable to reach AgentVoice relay.")
+        when {
+            error is RelayClientException -> error
+            error is SocketTimeoutException -> RelayClientException(
+                "Timed out waiting for AgentVoice relay. Check the relay, Wi-Fi, or Tailscale connection."
+            )
+            error.message?.contains("timeout", ignoreCase = true) == true -> RelayClientException(
+                "Timed out waiting for AgentVoice relay. Check the relay, Wi-Fi, or Tailscale connection."
+            )
+            else -> RelayClientException(error.message ?: "Unable to reach AgentVoice relay.")
         }
+
+    companion object {
+        private const val SEND_TIMEOUT_MS = 45_000L
+    }
 }
 
 class RelayClientException(message: String) : Exception(message)

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_agentvoice_tile"
+        android:shortcutId="talk_to_jynx"
+        android:shortcutLongLabel="@string/shortcut_talk_long_label"
+        android:shortcutShortLabel="@string/shortcut_talk_short_label">
+        <intent
+            android:action="com.agentvoice.app.action.START_LISTENING"
+            android:targetClass="com.agentvoice.app.MainActivity"
+            android:targetPackage="com.agentvoice.app" />
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_agentvoice_tile"
+        android:shortcutId="driving_mode"
+        android:shortcutLongLabel="@string/shortcut_driving_long_label"
+        android:shortcutShortLabel="@string/shortcut_driving_short_label">
+        <intent
+            android:action="com.agentvoice.app.action.OPEN_DRIVING"
+            android:targetClass="com.agentvoice.app.MainActivity"
+            android:targetPackage="com.agentvoice.app" />
+    </shortcut>
+</shortcuts>

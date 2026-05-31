@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
@@ -67,6 +68,7 @@ fun MainScreen(
     onSendTypedMessage: () -> Unit,
     onRetryClick: () -> Unit,
     onSpeakAgainClick: () -> Unit,
+    onDrivingModeClick: () -> Unit,
     onHistorySelected: (ConversationRecord) -> Unit,
     onDismissHistory: () -> Unit,
     onTtsToggle: (Boolean) -> Unit,
@@ -90,6 +92,9 @@ fun MainScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onDrivingModeClick) {
+                        Icon(Icons.Default.DirectionsCar, contentDescription = "Driving mode")
+                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -183,7 +188,8 @@ fun MainScreen(
             )
 
             MessageCard(
-                title = "Agent response",
+                title = uiState.lastConnector?.let { "Agent response (${it.label})" }
+                    ?: "Agent response",
                 body = uiState.agentReply,
                 emptyBody = "No response yet.",
                 onCopy = {

@@ -36,6 +36,18 @@ export function buildQueuedAction(
   };
 }
 
+export function buildCaptureOnlyAction(message: string, createId: () => string): QueuedAction {
+  const actionType = detectActionType(message) ?? "note";
+
+  return {
+    id: createId(),
+    type: actionType,
+    summary: summarizeAction(message),
+    requiresConfirmation: true,
+    status: "queued"
+  };
+}
+
 function detectActionType(message: string): QueuedActionType | null {
   const match = ACTION_PATTERNS.find((candidate) => candidate.pattern.test(message));
   return match?.type ?? null;
@@ -45,6 +57,7 @@ function summarizeAction(message: string): string {
   const trimmed = message
     .trim()
     .replace(/^please\s+/i, "")
+    .replace(/^capture\s+/i, "")
     .replace(/^remind me to\s+/i, "")
     .replace(/^can you\s+/i, "")
     .replace(/^could you\s+/i, "");

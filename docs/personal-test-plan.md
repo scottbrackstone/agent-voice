@@ -32,6 +32,13 @@ wsl.exe bash -lc "systemctl --user stop agentvoice-relay.service"
 - Use Speak again on a reply.
 - Copy the transcript and reply.
 - Open one history item and confirm detail is readable.
+- Open Driving mode and confirm the large Talk button works.
+- Start a hands-free session, complete two turns, then tap Stop.
+- Interrupt Jynx mid-reply and confirm listening starts immediately.
+- Add the Quick Settings tile and confirm it starts a visible hands-free session.
+- Show the driving notification shortcut and confirm Talk starts a visible hands-free session.
+- Toggle Start in Driving mode, Keep screen awake, and Auto-read replies.
+- Long-press the launcher icon and test Talk to Jynx and Driving shortcuts.
 
 ## Day 1 - First Pocket Test
 
@@ -76,6 +83,12 @@ wsl.exe bash -lc "systemctl --user stop agentvoice-relay.service"
 - Test an unreachable relay.
 - Test a blank typed message.
 - Test TTS off, then Speak again after turning TTS back on.
+- Test the driving shortcut notification permission flow.
+- Test the Quick Settings tile from the shade.
+- Confirm hands-free stops after a silence or speech error.
+- Restart the app and confirm Start in Driving mode works only when enabled.
+- Confirm the screen stays awake in Driving mode only when Keep screen awake is enabled.
+- Change Driving mode default and confirm it does not change the normal app mode.
 - Clear history and confirm the app returns to a clean state.
 
 ## Day 7 - Decision Pass
@@ -83,7 +96,7 @@ wsl.exe bash -lc "systemctl --user stop agentvoice-relay.service"
 - Review the week's notes.
 - Pick the top three fixes needed before Stage 9.
 - Decide whether the current relay URL and connector settings are comfortable for continued personal use.
-- Confirm Mock connector, OpenClaw connector, typed fallback, voice capture, TTS, copy actions, retry, and history all still work.
+- Confirm Mock connector, OpenClaw connector, typed fallback, voice capture, TTS, copy actions, retry, history, Driving mode, Quick Settings tile, and notification shortcut all still work.
 
 ## Notes Template
 

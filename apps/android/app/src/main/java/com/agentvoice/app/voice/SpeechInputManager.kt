@@ -12,6 +12,8 @@ class SpeechInputManager(
     private val listener: Listener
 ) {
     private var recognizer: SpeechRecognizer? = null
+    private var isListening = false
+    private var suppressNextError = false
 
     interface Listener {
         fun onListeningStarted()
@@ -32,7 +34,19 @@ class SpeechInputManager(
         }
 
         listener.onListeningStarted()
+        isListening = true
         activeRecognizer.startListening(createRecognizerIntent())
+    }
+
+    fun cancelListening() {
+        if (!isListening) {
+            return
+        }
+
+        suppressNextError = true
+        recognizer?.cancel()
+        isListening = false
+        listener.onListeningFinished()
     }
 
     fun destroy() {
@@ -57,14 +71,22 @@ class SpeechInputManager(
             override fun onBufferReceived(buffer: ByteArray?) = Unit
 
             override fun onEndOfSpeech() {
+                isListening = false
                 listener.onListeningFinished()
             }
 
             override fun onError(error: Int) {
+                isListening = false
+                if (suppressNextError) {
+                    suppressNextError = false
+                    return
+                }
+
                 listener.onError(errorMessage(error))
             }
 
             override fun onResults(results: Bundle?) {
+                isListening = false
                 val matches = results
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     .orEmpty()

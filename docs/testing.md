@@ -90,6 +90,32 @@ Use this checklist after Stages 4 through 6:
 - Recent history persists after app restart.
 - Clear history removes local entries.
 
+## Stage 8 And 9 Phone Test Checklist
+
+Use this checklist after installing the personal testing build:
+
+- Settings Test Connection succeeds against the relay URL.
+- Mock test prompt returns a mock reply.
+- OpenClaw test prompt reaches OpenClaw through the relay.
+- Typed message fallback sends and saves to history.
+- Copy transcript and copy reply work from the current response.
+- Speak again works when TTS is enabled and stays disabled when TTS is off.
+- Settings debug status shows app version, last connector, last request, and last error.
+- Driving mode opens from the car icon and uses the large Talk button.
+- The driving shortcut notification can be shown and hidden from Settings.
+- The notification Talk action opens AgentVoice and starts a visible hands-free session after microphone permission is granted.
+- The Quick Settings tile can be added manually, then opens AgentVoice and starts a visible hands-free session.
+- Start hands-free in Driving mode, speak, wait for the reply, and confirm it starts listening again.
+- While Jynx is speaking in hands-free mode, tap Interrupt and confirm TTS stops and listening starts immediately.
+- Stop hands-free and confirm TTS stops and the microphone is no longer listening.
+- Let a hands-free session run until the 10-minute timeout and confirm it stops.
+- Driving behavior settings persist after app restart: Start in Driving mode, Keep screen awake, and Auto-read replies.
+- Driving mode default can be changed independently of the normal app mode.
+- Driving mode keeps the screen awake only when that setting is enabled.
+- Driving mode shows recent replies without needing to open full history.
+- Long-pressing the launcher icon shows Talk to Jynx and Driving shortcuts.
+- No wake word or always-on listening behavior is present.
+
 ## OpenClaw Connector Test Plan
 
 Do not implement live OpenClaw behavior until protocol details are known.

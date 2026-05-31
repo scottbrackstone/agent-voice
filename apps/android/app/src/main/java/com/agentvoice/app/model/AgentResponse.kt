@@ -25,6 +25,7 @@ enum class AgentStatus(val wireValue: String) {
 enum class ConnectorType(val value: String, val label: String) {
     Mock("mock", "mock"),
     OpenClaw("openclaw", "OpenClaw"),
+    Relay("relay", "AgentVoice Relay"),
     Webhook("webhook", "webhook"),
     Hermes("hermes", "Hermes");
 

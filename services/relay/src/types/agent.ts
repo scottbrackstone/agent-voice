@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const AgentNameSchema = z.enum(["mock", "openclaw", "webhook", "hermes"]);
+export const AgentNameSchema = z.enum(["mock", "openclaw", "webhook", "hermes", "relay"]);
 
 export const AgentModeSchema = z.enum(["normal", "mobile", "capture_only", "review_required"]);
 
