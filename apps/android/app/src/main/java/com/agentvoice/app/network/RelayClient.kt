@@ -10,6 +10,7 @@ import com.agentvoice.app.model.QueuedActionType
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -17,6 +18,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONException
@@ -57,6 +59,34 @@ class RelayClient(
                     parseAgentResponse(responseBody)
                 }
             )
+        } catch (error: TimeoutCancellationException) {
+            Result.failure(RelayClientException("Timed out waiting for AgentVoice relay."))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(toRelayError(error))
+        }
+    }
+
+    suspend fun testConnection(backendUrl: String): Result<String> {
+        return try {
+            Result.success(
+                withTimeout(8_000) {
+                    val baseUrl = normalizeBackendUrl(backendUrl)
+                    val response = client.get("$baseUrl/health")
+                    val responseBody = response.body<String>()
+
+                    if (!response.status.isSuccess()) {
+                        throw RelayClientException(
+                            "Relay health check returned HTTP ${response.status.value}: ${responseBody.take(240)}"
+                        )
+                    }
+
+                    parseHealthResponse(responseBody)
+                }
+            )
+        } catch (error: TimeoutCancellationException) {
+            Result.failure(RelayClientException("Timed out checking AgentVoice relay."))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -101,6 +131,20 @@ class RelayClient(
             )
         } catch (error: JSONException) {
             throw RelayClientException("Relay response was not in the expected AgentVoice shape.")
+        }
+    }
+
+    private fun parseHealthResponse(body: String): String {
+        try {
+            val json = JSONObject(body)
+            if (!json.optBoolean("ok", false)) {
+                throw RelayClientException("Relay health check did not report ready.")
+            }
+
+            val service = json.optString("service", "agentvoice-relay")
+            return "$service is reachable."
+        } catch (error: JSONException) {
+            throw RelayClientException("Relay health response was not in the expected shape.")
         }
     }
 

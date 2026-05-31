@@ -10,16 +10,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -38,6 +43,7 @@ fun SettingsScreen(
     uiState: MainUiState,
     onBackendUrlChange: (String) -> Unit,
     onSaveBackendUrl: () -> Unit,
+    onTestConnection: () -> Unit,
     onAgentSelected: (ConnectorType) -> Unit,
     onClearHistory: () -> Unit,
     onBack: () -> Unit,
@@ -59,6 +65,7 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
@@ -70,13 +77,42 @@ fun SettingsScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Button(
-                    onClick = onSaveBackendUrl,
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(Icons.Default.Save, contentDescription = null)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Save")
+                    Button(
+                        onClick = onSaveBackendUrl,
+                        enabled = !uiState.isTestingConnection,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Save, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Save")
+                    }
+                    OutlinedButton(
+                        onClick = onTestConnection,
+                        enabled = !uiState.isTestingConnection,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Test")
+                    }
+                }
+                if (uiState.isTestingConnection) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                uiState.connectionTestMessage?.let { message ->
+                    Text(
+                        message,
+                        color = when (uiState.connectionTestSucceeded) {
+                            true -> MaterialTheme.colorScheme.primary
+                            false -> MaterialTheme.colorScheme.error
+                            null -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
 

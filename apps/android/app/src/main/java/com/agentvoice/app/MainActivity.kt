@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
                             uiState = uiState,
                             onBackendUrlChange = viewModel::updateBackendUrlDraft,
                             onSaveBackendUrl = viewModel::saveBackendUrl,
+                            onTestConnection = viewModel::testConnection,
                             onAgentSelected = viewModel::selectAgent,
                             onClearHistory = viewModel::clearHistory,
                             onBack = viewModel::closeSettings
@@ -78,7 +79,10 @@ class MainActivity : ComponentActivity() {
                             uiState = uiState,
                             onModeSelected = viewModel::selectMode,
                             onTalkClick = ::handleTalkClick,
+                            onTypedMessageChange = viewModel::updateTypedMessage,
+                            onSendTypedMessage = ::handleSendTypedMessage,
                             onRetryClick = ::handleRetryClick,
+                            onSpeakAgainClick = ::handleSpeakAgainClick,
                             onHistorySelected = viewModel::selectHistory,
                             onDismissHistory = viewModel::dismissHistoryDetail,
                             onTtsToggle = ::handleTtsToggle,
@@ -118,5 +122,13 @@ class MainActivity : ComponentActivity() {
 
     private fun handleRetryClick() {
         viewModel.retryLastMessage(ttsManager::speak)
+    }
+
+    private fun handleSendTypedMessage() {
+        viewModel.sendTypedMessage(ttsManager::speak)
+    }
+
+    private fun handleSpeakAgainClick() {
+        ttsManager.speak(viewModel.uiState.value.agentReply)
     }
 }

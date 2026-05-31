@@ -20,11 +20,15 @@ data class MainUiState(
     val mode: AgentMode = AgentMode.Normal,
     val isListening: Boolean = false,
     val isLoading: Boolean = false,
-    val transcript: String = "Tap Talk to capture a command.",
-    val agentReply: String = "Relay replies will appear here.",
+    val isTestingConnection: Boolean = false,
+    val transcript: String = "",
+    val agentReply: String = "",
+    val typedMessage: String = "",
     val queuedActions: List<QueuedAction> = emptyList(),
     val warnings: List<String> = emptyList(),
     val errorMessage: String? = null,
+    val connectionTestMessage: String? = null,
+    val connectionTestSucceeded: Boolean? = null,
     val ttsEnabled: Boolean = true,
     val recentHistory: List<ConversationRecord> = emptyList(),
     val selectedHistory: ConversationRecord? = null,
@@ -36,6 +40,12 @@ data class MainUiState(
 ) {
     val canRetry: Boolean
         get() = !isLoading && errorMessage != null && !lastTranscript.isNullOrBlank()
+
+    val canSendTypedMessage: Boolean
+        get() = !isLoading && !isListening && typedMessage.isNotBlank()
+
+    val canSpeakAgain: Boolean
+        get() = !isLoading && ttsEnabled && agentReply.isNotBlank()
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -102,8 +112,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onTranscriptCaptured(transcript: String, speak: (String) -> Unit) {
-        val trimmedTranscript = transcript.trim()
+        submitTranscript(transcript, speak)
+    }
 
+    fun updateTypedMessage(message: String) {
+        _uiState.update { it.copy(typedMessage = message, errorMessage = null) }
+    }
+
+    fun sendTypedMessage(speak: (String) -> Unit) {
+        submitTranscript(_uiState.value.typedMessage, speak, clearTypedMessage = true)
+    }
+
+    private fun submitTranscript(
+        transcript: String,
+        speak: (String) -> Unit,
+        clearTypedMessage: Boolean = false
+    ) {
+        val trimmedTranscript = transcript.trim()
         if (trimmedTranscript.isBlank()) {
             onSpeechError("I did not catch that. Try again.")
             return
@@ -120,6 +145,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 warnings = emptyList(),
                 errorMessage = null,
                 lastTranscript = trimmedTranscript,
+                typedMessage = if (clearTypedMessage) "" else it.typedMessage,
                 connectionStatus = "Sending to relay"
             )
         }
@@ -204,7 +230,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateBackendUrlDraft(url: String) {
-        _uiState.update { it.copy(backendUrlDraft = url, errorMessage = null) }
+        _uiState.update {
+            it.copy(
+                backendUrlDraft = url,
+                errorMessage = null,
+                connectionTestMessage = null,
+                connectionTestSucceeded = null
+            )
+        }
     }
 
     fun saveBackendUrl() {
@@ -221,9 +254,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     backendUrl = url,
                     backendUrlDraft = url,
                     connectionStatus = "Relay URL saved",
+                    errorMessage = null,
+                    connectionTestMessage = null,
+                    connectionTestSucceeded = null
+                )
+            }
+        }
+    }
+
+    fun testConnection() {
+        val url = _uiState.value.backendUrlDraft.trim()
+        if (url.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    connectionTestMessage = "Backend URL cannot be empty.",
+                    connectionTestSucceeded = false,
                     errorMessage = null
                 )
             }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                isTestingConnection = true,
+                connectionStatus = "Checking relay",
+                connectionTestMessage = "Checking AgentVoice relay...",
+                connectionTestSucceeded = null,
+                errorMessage = null
+            )
+        }
+
+        viewModelScope.launch {
+            relayClient
+                .testConnection(url)
+                .onSuccess { message ->
+                    _uiState.update {
+                        it.copy(
+                            isTestingConnection = false,
+                            connectionStatus = "Relay reachable",
+                            connectionTestMessage = message,
+                            connectionTestSucceeded = true,
+                            errorMessage = null
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            isTestingConnection = false,
+                            connectionStatus = "Relay test failed",
+                            connectionTestMessage = error.message
+                                ?: "Unable to reach AgentVoice relay.",
+                            connectionTestSucceeded = false,
+                            errorMessage = null
+                        )
+                    }
+                }
         }
     }
 
