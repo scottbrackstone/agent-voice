@@ -111,3 +111,5 @@ Test cases for Stage 7:
 - Missing OpenClaw config returns a clear typed error.
 - Invalid OpenClaw response is handled safely.
 - Live OpenClaw message succeeds only when a real gateway is configured.
+
+Stage 7 inspection found only the OpenCLAW Companion `GET /events` and `POST /feedback` contract. Until a user-message Gateway contract exists, OpenClaw requests should fail clearly rather than pretending to send messages.
