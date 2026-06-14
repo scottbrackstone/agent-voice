@@ -170,5 +170,31 @@ describe("AgentVoice relay", () => {
       summary: "This voice note from the car"
     });
   });
+
+  it("returns a clear transcribe error when Voxtral is not configured", async () => {
+    const previousApiKey = process.env.MISTRAL_API_KEY;
+    delete process.env.MISTRAL_API_KEY;
+    const server = buildServer({ logger: false });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/transcribe",
+      headers: {
+        "content-type": "audio/mp4"
+      },
+      payload: Buffer.from("not real audio")
+    });
+
+    await server.close();
+    if (previousApiKey) {
+      process.env.MISTRAL_API_KEY = previousApiKey;
+    }
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: "Voxtral transcription is not configured."
+    });
+    expect(response.json().requestId).toMatch(/^req_/);
+  });
 });
 

@@ -20,6 +20,8 @@ data class AppSettings(
     val startInDrivingMode: Boolean = false,
     val keepScreenAwakeInDrivingMode: Boolean = true,
     val drivingAutoSpeak: Boolean = true,
+    val drivingRequireWakeWord: Boolean = false,
+    val drivingUseVoxtralTranscription: Boolean = false,
     val drivingMode: AgentMode = AgentMode.Mobile
 )
 
@@ -37,6 +39,9 @@ class SettingsRepository(private val context: Context) {
             startInDrivingMode = preferences[START_IN_DRIVING_MODE] ?: false,
             keepScreenAwakeInDrivingMode = preferences[KEEP_SCREEN_AWAKE_IN_DRIVING_MODE] ?: true,
             drivingAutoSpeak = preferences[DRIVING_AUTO_SPEAK] ?: true,
+            drivingRequireWakeWord = preferences[DRIVING_REQUIRE_WAKE_WORD] ?: false,
+            drivingUseVoxtralTranscription = preferences[DRIVING_USE_VOXTRAL_TRANSCRIPTION]
+                ?: false,
             drivingMode = AgentMode.fromWireValue(
                 preferences[DRIVING_MODE] ?: AgentMode.Mobile.wireValue
             )
@@ -85,6 +90,18 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    suspend fun setDrivingRequireWakeWord(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[DRIVING_REQUIRE_WAKE_WORD] = enabled
+        }
+    }
+
+    suspend fun setDrivingUseVoxtralTranscription(enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[DRIVING_USE_VOXTRAL_TRANSCRIPTION] = enabled
+        }
+    }
+
     suspend fun setDrivingMode(mode: AgentMode) {
         context.settingsDataStore.edit { preferences ->
             preferences[DRIVING_MODE] = mode.wireValue
@@ -102,6 +119,9 @@ class SettingsRepository(private val context: Context) {
         private val KEEP_SCREEN_AWAKE_IN_DRIVING_MODE =
             booleanPreferencesKey("keep_screen_awake_in_driving_mode")
         private val DRIVING_AUTO_SPEAK = booleanPreferencesKey("driving_auto_speak")
+        private val DRIVING_REQUIRE_WAKE_WORD = booleanPreferencesKey("driving_require_wake_word")
+        private val DRIVING_USE_VOXTRAL_TRANSCRIPTION =
+            booleanPreferencesKey("driving_use_voxtral_transcription")
         private val DRIVING_MODE = stringPreferencesKey("driving_mode")
     }
 }

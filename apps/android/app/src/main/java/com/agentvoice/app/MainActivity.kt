@@ -14,9 +14,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.shortcut.VoiceShortcutNotifier
@@ -27,6 +29,11 @@ import com.agentvoice.app.ui.theme.AgentVoiceTheme
 import com.agentvoice.app.viewmodel.MainViewModel
 import com.agentvoice.app.voice.SpeechInputManager
 import com.agentvoice.app.voice.TtsManager
+import com.agentvoice.app.voice.VoiceClipRecorder
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -34,6 +41,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var speechInputManager: SpeechInputManager
     private lateinit var shortcutNotifier: VoiceShortcutNotifier
     private lateinit var ttsManager: TtsManager
+    private lateinit var voiceClipRecorder: VoiceClipRecorder
 
     private val handsFreeRestartRunnable = Runnable {
         maybeStartHandsFreeListening()
@@ -86,15 +94,37 @@ class MainActivity : ComponentActivity() {
 
                 override fun onError(message: String) {
                     if (viewModel.uiState.value.isHandsFreeSessionActive) {
-                        handsFreeHandler.removeCallbacks(handsFreeRestartRunnable)
-                        handsFreeHandler.removeCallbacks(handsFreeTimeoutRunnable)
-                        ttsManager.stop()
+                        if (isFatalSpeechError(message)) {
+                            handsFreeHandler.removeCallbacks(handsFreeRestartRunnable)
+                            handsFreeHandler.removeCallbacks(handsFreeTimeoutRunnable)
+                            ttsManager.stop()
+                            viewModel.onSpeechError(message)
+                        } else {
+                            viewModel.onHandsFreeRecoverableError(message)
+                        }
+                        return
                     }
                     viewModel.onSpeechError(message)
                 }
             }
         )
         ttsManager = TtsManager(this)
+        voiceClipRecorder = VoiceClipRecorder(
+            context = this,
+            listener = object : VoiceClipRecorder.Listener {
+                override fun onRecordingStarted() {
+                    viewModel.onVoiceClipRecordingStarted()
+                }
+
+                override fun onRecordingFinished(file: File) {
+                    handleVoiceClipRecorded(file)
+                }
+
+                override fun onRecordingError(message: String) {
+                    viewModel.onVoiceClipError(message)
+                }
+            }
+        )
 
         setContent {
             AgentVoiceTheme {
@@ -109,11 +139,15 @@ class MainActivity : ComponentActivity() {
                             onTestConnection = viewModel::testConnection,
                             onSendMockTestPrompt = ::handleMockTestPrompt,
                             onSendOpenClawTestPrompt = ::handleOpenClawTestPrompt,
+                            onSendHermesTestPrompt = ::handleHermesTestPrompt,
                             onShowDrivingNotification = ::handleShowDrivingNotification,
                             onHideDrivingNotification = ::handleHideDrivingNotification,
                             onStartInDrivingModeToggle = viewModel::setStartInDrivingMode,
                             onKeepScreenAwakeToggle = viewModel::setKeepScreenAwakeInDrivingMode,
                             onDrivingAutoSpeakToggle = viewModel::setDrivingAutoSpeak,
+                            onDrivingRequireWakeWordToggle = viewModel::setDrivingRequireWakeWord,
+                            onDrivingUseVoxtralTranscriptionToggle =
+                                viewModel::setDrivingUseVoxtralTranscription,
                             onDrivingModeSelected = viewModel::setDrivingMode,
                             onAgentSelected = viewModel::selectAgent,
                             onClearHistory = viewModel::clearHistory,
@@ -154,6 +188,15 @@ class MainActivity : ComponentActivity() {
                                 uiState.keepScreenAwakeInDrivingMode
                         )
                     }
+
+                    LaunchedEffect(uiState.handsFreeRestartSignal) {
+                        if (
+                            uiState.handsFreeRestartSignal > 0 &&
+                            uiState.isHandsFreeSessionActive
+                        ) {
+                            scheduleHandsFreeRestart(HANDS_FREE_RECOVERY_DELAY_MS)
+                        }
+                    }
                 }
             }
         }
@@ -170,11 +213,22 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         handsFreeHandler.removeCallbacksAndMessages(null)
         speechInputManager.destroy()
+        voiceClipRecorder.destroy()
         ttsManager.shutdown()
         super.onDestroy()
     }
 
     private fun handleTalkClick() {
+        val state = viewModel.uiState.value
+        if (state.isHandsFreeSessionActive && state.isSpeaking) {
+            handleInterruptClick()
+            return
+        }
+        if (state.isRecordingVoiceClip) {
+            voiceClipRecorder.stop()
+            return
+        }
+
         val permission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
         if (permission == PackageManager.PERMISSION_GRANTED) {
             startSpeechInput()
@@ -185,7 +239,17 @@ class MainActivity : ComponentActivity() {
 
     private fun startSpeechInput() {
         val state = viewModel.uiState.value
-        if (state.isListening || state.isLoading) {
+        if (
+            state.isListening ||
+            state.isLoading ||
+            state.isRecordingVoiceClip ||
+            state.isTranscribingVoiceClip
+        ) {
+            return
+        }
+
+        if (state.isDrivingMode && state.drivingUseVoxtralTranscription) {
+            voiceClipRecorder.start()
             return
         }
 
@@ -247,6 +311,7 @@ class MainActivity : ComponentActivity() {
 
         handsFreeHandler.removeCallbacks(handsFreeRestartRunnable)
         ttsManager.stop()
+        voiceClipRecorder.cancel()
         viewModel.onSpeakingFinished()
         viewModel.onHandsFreeWaitingForNextTurn()
         startSpeechInput()
@@ -260,8 +325,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scheduleHandsFreeRestart() {
+        scheduleHandsFreeRestart(HANDS_FREE_RESTART_DELAY_MS)
+    }
+
+    private fun scheduleHandsFreeRestart(delayMs: Long) {
         handsFreeHandler.removeCallbacks(handsFreeRestartRunnable)
-        handsFreeHandler.postDelayed(handsFreeRestartRunnable, HANDS_FREE_RESTART_DELAY_MS)
+        handsFreeHandler.postDelayed(handsFreeRestartRunnable, delayMs)
     }
 
     private fun scheduleHandsFreeTimeout() {
@@ -275,7 +344,9 @@ class MainActivity : ComponentActivity() {
             state.isHandsFreeSessionActive &&
             state.isDrivingMode &&
             !state.isListening &&
-            !state.isLoading
+            !state.isLoading &&
+            !state.isRecordingVoiceClip &&
+            !state.isTranscribingVoiceClip
         ) {
             viewModel.onHandsFreeWaitingForNextTurn()
             startSpeechInput()
@@ -286,8 +357,33 @@ class MainActivity : ComponentActivity() {
         handsFreeHandler.removeCallbacks(handsFreeRestartRunnable)
         handsFreeHandler.removeCallbacks(handsFreeTimeoutRunnable)
         ttsManager.stop()
+        voiceClipRecorder.cancel()
         speechInputManager.cancelListening()
         viewModel.stopHandsFreeSession(reason)
+    }
+
+    private fun handleVoiceClipRecorded(file: File) {
+        lifecycleScope.launch {
+            val audioBytes = runCatching {
+                withContext(Dispatchers.IO) {
+                    file.readBytes()
+                }
+            }
+            file.delete()
+
+            audioBytes
+                .onSuccess { bytes ->
+                    viewModel.transcribeVoiceClip(bytes, ::handleAgentSpeech)
+                }
+                .onFailure { error ->
+                    viewModel.onVoiceClipError(error.message ?: "Unable to read voice recording.")
+                }
+        }
+    }
+
+    private fun isFatalSpeechError(message: String): Boolean {
+        return message.contains("permission", ignoreCase = true) ||
+            message.contains("not available", ignoreCase = true)
     }
 
     private fun applyDrivingWindowFlags(enabled: Boolean) {
@@ -304,6 +400,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleOpenClawTestPrompt() {
         viewModel.sendTestPrompt(ConnectorType.OpenClaw, ::handleAgentSpeech)
+    }
+
+    private fun handleHermesTestPrompt() {
+        viewModel.sendTestPrompt(ConnectorType.Hermes, ::handleAgentSpeech)
     }
 
     private fun handleShowDrivingNotification() {
@@ -344,6 +444,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val HANDS_FREE_RESTART_DELAY_MS = 650L
+        private const val HANDS_FREE_RECOVERY_DELAY_MS = 900L
         private const val HANDS_FREE_TIMEOUT_MS = 10 * 60 * 1000L
     }
 }

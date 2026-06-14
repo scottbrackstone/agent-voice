@@ -16,6 +16,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -105,6 +106,41 @@ class RelayClient(
         }
     }
 
+    suspend fun transcribeAudio(
+        backendUrl: String,
+        audioBytes: ByteArray,
+        contentType: String = "audio/mp4"
+    ): Result<String> {
+        return try {
+            Result.success(
+                withTimeout(TRANSCRIBE_TIMEOUT_MS) {
+                    val baseUrl = normalizeBackendUrl(backendUrl)
+                    val response = client.post("$baseUrl/api/transcribe") {
+                        header(HttpHeaders.ContentType, contentType)
+                        setBody(audioBytes)
+                    }
+                    val responseBody = response.body<String>()
+
+                    if (!response.status.isSuccess()) {
+                        throw RelayClientException(
+                            "Transcription returned HTTP ${response.status.value}: ${
+                                responseBody.take(240)
+                            }"
+                        )
+                    }
+
+                    parseTranscriptionResponse(responseBody)
+                }
+            )
+        } catch (error: TimeoutCancellationException) {
+            Result.failure(RelayClientException("Timed out waiting for Voxtral transcription."))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(toRelayError(error))
+        }
+    }
+
     fun close() {
         client.close()
     }
@@ -159,6 +195,15 @@ class RelayClient(
         }
     }
 
+    private fun parseTranscriptionResponse(body: String): String {
+        try {
+            val json = JSONObject(body)
+            return json.optString("transcript").trim()
+        } catch (error: JSONException) {
+            throw RelayClientException("Transcription response was not in the expected shape.")
+        }
+    }
+
     private fun JSONArray?.toQueuedActions(): List<QueuedAction> {
         if (this == null) {
             return emptyList()
@@ -198,6 +243,7 @@ class RelayClient(
 
     companion object {
         private const val SEND_TIMEOUT_MS = 45_000L
+        private const val TRANSCRIBE_TIMEOUT_MS = 40_000L
     }
 }
 

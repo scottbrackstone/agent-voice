@@ -8,6 +8,7 @@ import com.agentvoice.app.model.AgentMode
 import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.model.ConversationRecord
 import com.agentvoice.app.model.QueuedAction
+import com.agentvoice.app.model.QueuedActionStatus
 import com.agentvoice.app.network.RelayClient
 import com.agentvoice.app.storage.ConversationRepository
 import com.agentvoice.app.storage.SettingsRepository
@@ -38,11 +39,29 @@ data class MainUiState(
     val startInDrivingMode: Boolean = false,
     val keepScreenAwakeInDrivingMode: Boolean = true,
     val drivingAutoSpeak: Boolean = true,
+    val drivingRequireWakeWord: Boolean = false,
+    val drivingUseVoxtralTranscription: Boolean = false,
     val drivingMode: AgentMode = AgentMode.Mobile,
+    val isRecordingVoiceClip: Boolean = false,
+    val isTranscribingVoiceClip: Boolean = false,
     val isHandsFreeSessionActive: Boolean = false,
     val isSpeaking: Boolean = false,
     val handsFreeTurns: Int = 0,
     val handsFreeSessionStatus: String? = null,
+    val handsFreeRecoveryCount: Int = 0,
+    val handsFreeRestartSignal: Int = 0,
+    val handsFreeSessionQueuedActions: Int = 0,
+    val handsFreeSessionConfirmedActions: Int = 0,
+    val handsFreeSessionCancelledActions: Int = 0,
+    val handsFreeSessionIgnoredUtterances: Int = 0,
+    val handsFreeSessionSummary: String? = null,
+    val recentHandsFreeCaptures: List<String> = emptyList(),
+    val recentIgnoredUtterances: List<String> = emptyList(),
+    val localQueueStatusMessage: String? = null,
+    val lastSpeechErrorMessage: String? = null,
+    val lastRelayErrorMessage: String? = null,
+    val lastVoiceCommand: String? = null,
+    val lastIgnoredTranscript: String? = null,
     val recentHistory: List<ConversationRecord> = emptyList(),
     val selectedHistory: ConversationRecord? = null,
     val backendUrl: String = SettingsRepository.DEFAULT_BACKEND_URL,
@@ -70,6 +89,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val conversationRepository = ConversationRepository(application.applicationContext)
     private val relayClient = RelayClient()
     private var appliedInitialDrivingMode = false
+    private var allowNextWakeGatedUtterance = false
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
@@ -93,6 +113,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         startInDrivingMode = settings.startInDrivingMode,
                         keepScreenAwakeInDrivingMode = settings.keepScreenAwakeInDrivingMode,
                         drivingAutoSpeak = settings.drivingAutoSpeak,
+                        drivingRequireWakeWord = settings.drivingRequireWakeWord,
+                        drivingUseVoxtralTranscription = settings.drivingUseVoxtralTranscription,
                         drivingMode = settings.drivingMode,
                         isDrivingMode = it.isDrivingMode || shouldOpenDrivingMode
                     )
@@ -128,7 +150,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isSpeaking = false,
                 errorMessage = null,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
-                    "Listening"
+                    if (it.drivingRequireWakeWord && !allowNextWakeGatedUtterance) {
+                        "Listening for Jynx"
+                    } else {
+                        "Listening"
+                    }
                 } else {
                     it.handsFreeSessionStatus
                 },
@@ -147,7 +173,115 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onTranscriptCaptured(transcript: String, speak: (String) -> Unit) {
-        submitTranscript(transcript, speak)
+        if (handleImmediateHandsFreeVoiceCommand(transcript, speak)) {
+            return
+        }
+
+        val preparedTranscript = prepareHandsFreeTranscript(transcript) ?: return
+        if (handleHandsFreeVoiceCommand(preparedTranscript.transcript, speak)) {
+            return
+        }
+
+        submitTranscript(
+            transcript = preparedTranscript.transcript,
+            speak = speak,
+            modeOverride = preparedTranscript.modeOverride
+        )
+    }
+
+    fun onVoiceClipRecordingStarted() {
+        _uiState.update {
+            it.copy(
+                isRecordingVoiceClip = true,
+                isTranscribingVoiceClip = false,
+                isListening = false,
+                errorMessage = null,
+                connectionStatus = if (it.isHandsFreeSessionActive) {
+                    "Recording"
+                } else {
+                    "Recording voice"
+                },
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    if (it.drivingRequireWakeWord) {
+                        "Recording. Say Hey Jynx, then your request"
+                    } else {
+                        "Recording"
+                    }
+                } else {
+                    it.handsFreeSessionStatus
+                }
+            )
+        }
+    }
+
+    fun onVoiceClipTranscribing() {
+        _uiState.update {
+            it.copy(
+                isRecordingVoiceClip = false,
+                isTranscribingVoiceClip = true,
+                connectionStatus = "Transcribing",
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Transcribing"
+                } else {
+                    it.handsFreeSessionStatus
+                }
+            )
+        }
+    }
+
+    fun onVoiceClipTranscribed(transcript: String, speak: (String) -> Unit) {
+        _uiState.update { it.copy(isTranscribingVoiceClip = false) }
+        onTranscriptCaptured(transcript, speak)
+    }
+
+    fun transcribeVoiceClip(audioBytes: ByteArray, speak: (String) -> Unit) {
+        val backendUrl = _uiState.value.backendUrl
+        onVoiceClipTranscribing()
+
+        viewModelScope.launch {
+            relayClient
+                .transcribeAudio(
+                    backendUrl = backendUrl,
+                    audioBytes = audioBytes
+                )
+                .onSuccess { transcript ->
+                    if (transcript.isBlank()) {
+                        onVoiceClipError("I did not catch that. Try again.")
+                    } else {
+                        onVoiceClipTranscribed(transcript, speak)
+                    }
+                }
+                .onFailure { error ->
+                    onVoiceClipError(error.message ?: "Unable to transcribe voice.")
+                }
+        }
+    }
+
+    fun onVoiceClipError(message: String) {
+        _uiState.update {
+            it.copy(
+                isRecordingVoiceClip = false,
+                isTranscribingVoiceClip = false,
+                connectionStatus = if (it.isHandsFreeSessionActive) "Listening again" else "Voice error",
+                errorMessage = message,
+                lastSpeechErrorMessage = message,
+                handsFreeRecoveryCount = if (it.isHandsFreeSessionActive) {
+                    it.handsFreeRecoveryCount + 1
+                } else {
+                    it.handsFreeRecoveryCount
+                },
+                handsFreeRestartSignal = if (it.isHandsFreeSessionActive) {
+                    it.handsFreeRestartSignal + 1
+                } else {
+                    it.handsFreeRestartSignal
+                },
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Listening again"
+                } else {
+                    it.handsFreeSessionStatus
+                }
+            )
+        }
     }
 
     fun updateTypedMessage(message: String) {
@@ -199,7 +333,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lastTranscript = trimmedTranscript,
                 typedMessage = if (clearTypedMessage) "" else it.typedMessage,
                 lastErrorMessage = null,
-                connectionStatus = "Sending to relay"
+                lastRelayErrorMessage = null,
+                localQueueStatusMessage = null,
+                connectionStatus = if (it.isHandsFreeSessionActive) "Thinking" else "Sending to relay",
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
+                    "Thinking"
+                } else {
+                    it.handsFreeSessionStatus
+                }
             )
         }
 
@@ -228,6 +369,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 it.handsFreeTurns + 1
                             } else {
                                 it.handsFreeTurns
+                            },
+                            handsFreeSessionQueuedActions = if (it.isHandsFreeSessionActive) {
+                                it.handsFreeSessionQueuedActions + response.queuedActions.size
+                            } else {
+                                it.handsFreeSessionQueuedActions
+                            },
+                            recentHandsFreeCaptures = if (it.isHandsFreeSessionActive) {
+                                appendRecent(trimmedTranscript, it.recentHandsFreeCaptures)
+                            } else {
+                                it.recentHandsFreeCaptures
                             },
                             handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
                                 "Reply received"
@@ -258,12 +409,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update {
                         it.copy(
                             isLoading = false,
-                            connectionStatus = "Relay error",
+                            connectionStatus = if (it.isHandsFreeSessionActive) {
+                                "Recovering"
+                            } else {
+                                "Relay error"
+                            },
                             errorMessage = message,
                             lastErrorMessage = message,
-                            isHandsFreeSessionActive = false,
+                            lastRelayErrorMessage = message,
+                            isHandsFreeSessionActive = it.isHandsFreeSessionActive,
+                            handsFreeRecoveryCount = if (it.isHandsFreeSessionActive) {
+                                it.handsFreeRecoveryCount + 1
+                            } else {
+                                it.handsFreeRecoveryCount
+                            },
+                            handsFreeRestartSignal = if (it.isHandsFreeSessionActive) {
+                                it.handsFreeRestartSignal + 1
+                            } else {
+                                it.handsFreeRestartSignal
+                            },
                             handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
-                                "Stopped after relay error"
+                                "Relay timed out. Listening again"
                             } else {
                                 it.handsFreeSessionStatus
                             }
@@ -285,6 +451,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isLoading = false,
                 connectionStatus = "Microphone permission denied",
                 errorMessage = "Microphone permission is needed to use push-to-talk.",
+                lastSpeechErrorMessage = "Microphone permission is needed to use push-to-talk.",
                 isHandsFreeSessionActive = false,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
                     "Stopped after permission denial"
@@ -302,12 +469,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isLoading = false,
                 connectionStatus = "Speech input error",
                 errorMessage = message,
+                lastSpeechErrorMessage = message,
                 isHandsFreeSessionActive = false,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
                     "Stopped after speech error"
                 } else {
                     it.handsFreeSessionStatus
                 }
+            )
+        }
+    }
+
+    fun onHandsFreeRecoverableError(message: String) {
+        _uiState.update {
+            it.copy(
+                isListening = false,
+                isLoading = false,
+                connectionStatus = "Listening again",
+                errorMessage = message,
+                lastErrorMessage = message,
+                lastSpeechErrorMessage = message,
+                handsFreeRecoveryCount = it.handsFreeRecoveryCount + 1,
+                handsFreeRestartSignal = it.handsFreeRestartSignal + 1,
+                handsFreeSessionStatus = "Listening again"
             )
         }
     }
@@ -337,6 +521,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(drivingAutoSpeak = enabled) }
         viewModelScope.launch {
             settingsRepository.setDrivingAutoSpeak(enabled)
+        }
+    }
+
+    fun setDrivingRequireWakeWord(enabled: Boolean) {
+        if (!enabled) {
+            allowNextWakeGatedUtterance = false
+        }
+
+        _uiState.update { it.copy(drivingRequireWakeWord = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setDrivingRequireWakeWord(enabled)
+        }
+    }
+
+    fun setDrivingUseVoxtralTranscription(enabled: Boolean) {
+        _uiState.update { it.copy(drivingUseVoxtralTranscription = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setDrivingUseVoxtralTranscription(enabled)
         }
     }
 
@@ -474,10 +676,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeDrivingMode() {
+        allowNextWakeGatedUtterance = false
         _uiState.update {
             it.copy(
                 isDrivingMode = false,
                 isHandsFreeSessionActive = false,
+                isRecordingVoiceClip = false,
+                isTranscribingVoiceClip = false,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
                     "Stopped"
                 } else {
@@ -488,24 +693,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startHandsFreeSession() {
+        allowNextWakeGatedUtterance = false
         _uiState.update {
             it.copy(
                 isDrivingMode = true,
                 showSettings = false,
                 isHandsFreeSessionActive = true,
                 handsFreeTurns = 0,
-                handsFreeSessionStatus = "Starting"
+                handsFreeSessionQueuedActions = 0,
+                handsFreeSessionConfirmedActions = 0,
+                handsFreeSessionCancelledActions = 0,
+                handsFreeSessionIgnoredUtterances = 0,
+                handsFreeSessionSummary = null,
+                recentHandsFreeCaptures = emptyList(),
+                recentIgnoredUtterances = emptyList(),
+                localQueueStatusMessage = null,
+                handsFreeSessionStatus = if (it.drivingRequireWakeWord) {
+                    "Starting. Say Jynx first"
+                } else {
+                    "Starting"
+                }
             )
         }
     }
 
     fun stopHandsFreeSession(reason: String = "Stopped") {
+        allowNextWakeGatedUtterance = false
         _uiState.update {
             it.copy(
                 isHandsFreeSessionActive = false,
                 isListening = false,
                 isSpeaking = false,
-                handsFreeSessionStatus = reason
+                isRecordingVoiceClip = false,
+                isTranscribingVoiceClip = false,
+                handsFreeSessionStatus = reason,
+                handsFreeSessionSummary = buildHandsFreeSummary(it, reason),
+                lastVoiceCommand = if (reason.contains("voice", ignoreCase = true)) {
+                    reason
+                } else {
+                    it.lastVoiceCommand
+                }
             )
         }
     }
@@ -528,7 +755,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 isSpeaking = false,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
-                    "Preparing to listen"
+                    if (it.drivingRequireWakeWord) {
+                        "Preparing to listen for Jynx"
+                    } else {
+                        "Preparing to listen"
+                    }
                 } else {
                     it.handsFreeSessionStatus
                 }
@@ -539,12 +770,394 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun onHandsFreeWaitingForNextTurn() {
         _uiState.update {
             if (it.isHandsFreeSessionActive) {
-                it.copy(handsFreeSessionStatus = "Ready for next turn")
+                it.copy(
+                    handsFreeSessionStatus = if (it.drivingRequireWakeWord) {
+                        "Ready. Say Jynx first"
+                    } else {
+                        "Ready for next turn"
+                    }
+                )
             } else {
                 it
             }
         }
     }
+
+    private fun prepareHandsFreeTranscript(transcript: String): PreparedTranscript? {
+        val state = _uiState.value
+        if (!state.isHandsFreeSessionActive) {
+            return PreparedTranscript(transcript = transcript)
+        }
+
+        val wakeStripped = stripWakePhrase(transcript)
+        val hasWakePhrase = wakeStripped != null
+        val candidate = wakeStripped ?: transcript
+        val modeOverride = modeOverrideForDrivingPhrase(candidate)
+        val message = stripDrivingModePrefix(candidate).trim()
+
+        if (state.drivingRequireWakeWord) {
+            if (hasWakePhrase && message.isBlank()) {
+                allowNextWakeGatedUtterance = true
+                requestHandsFreeRestart(
+                    status = "Jynx heard",
+                    sessionStatus = "Listening for your request",
+                    command = "Jynx"
+                )
+                return null
+            }
+
+            if (!hasWakePhrase && !allowNextWakeGatedUtterance) {
+                requestHandsFreeRestart(
+                    status = "Waiting for Jynx",
+                    sessionStatus = "Ignored. Say Jynx first",
+                    ignoredTranscript = transcript
+                )
+                return null
+            }
+        }
+
+        allowNextWakeGatedUtterance = false
+        return PreparedTranscript(
+            transcript = message.ifBlank { candidate },
+            modeOverride = modeOverride
+        )
+    }
+
+    private fun handleImmediateHandsFreeVoiceCommand(
+        transcript: String,
+        speak: (String) -> Unit
+    ): Boolean {
+        if (!_uiState.value.isHandsFreeSessionActive) {
+            return false
+        }
+
+        val commandText = stripWakePhrase(transcript) ?: transcript
+        val normalized = normalizeVoiceText(commandText)
+        return when (normalized) {
+            "stop", "stop listening", "stop hands free", "stop handsfree",
+            "cancel hands free", "cancel handsfree" -> {
+                stopHandsFreeSession("Stopped by voice")
+                true
+            }
+
+            "interrupt", "stop talking" -> {
+                speakLocalFeedback("Ready.", speak, command = normalized)
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private fun handleHandsFreeVoiceCommand(
+        transcript: String,
+        speak: (String) -> Unit
+    ): Boolean {
+        if (!_uiState.value.isHandsFreeSessionActive) {
+            return false
+        }
+
+        val commandText = stripWakePhrase(transcript) ?: transcript
+        val normalized = normalizeVoiceText(commandText)
+
+        return when (normalized) {
+            "wait", "hold on", "pause", "pause listening" -> {
+                allowNextWakeGatedUtterance = false
+                speakLocalFeedback("Paused. Say Jynx when you are ready.", speak, command = normalized)
+                true
+            }
+
+            "resume", "keep going", "continue" -> {
+                allowNextWakeGatedUtterance = false
+                speakLocalFeedback("Listening.", speak, command = normalized)
+                true
+            }
+
+            "repeat", "repeat that", "say that again", "speak again" -> {
+                allowNextWakeGatedUtterance = false
+                val reply = _uiState.value.agentReply
+                if (reply.isBlank()) {
+                    requestHandsFreeRestart(
+                        status = "Nothing to repeat",
+                        sessionStatus = "Listening",
+                        command = normalized
+                    )
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            isListening = false,
+                            lastVoiceCommand = normalized,
+                            handsFreeSessionStatus = "Repeating"
+                        )
+                    }
+                    speak(reply)
+                }
+                true
+            }
+
+            "confirm", "confirm action", "confirm queued action" -> {
+                confirmNextQueuedAction(speak, normalized)
+                true
+            }
+
+            "cancel", "cancel action", "cancel queued action" -> {
+                cancelNextQueuedAction(speak, normalized)
+                true
+            }
+
+            "read queued actions", "read queue", "what is queued",
+            "whats queued", "queued actions" -> {
+                readQueuedActions(speak, normalized)
+                true
+            }
+
+            "help", "commands", "voice commands" -> {
+                speakLocalFeedback(
+                    "Try: repeat that, read queued actions, confirm, cancel, capture only, review mode, or stop hands free.",
+                    speak,
+                    command = normalized
+                )
+                true
+            }
+
+            "capture only", "capture mode" -> {
+                allowNextWakeGatedUtterance = false
+                updateDrivingModeByVoice(AgentMode.CaptureOnly, normalized, speak)
+                true
+            }
+
+            "mobile mode", "driving mode" -> {
+                allowNextWakeGatedUtterance = false
+                updateDrivingModeByVoice(AgentMode.Mobile, normalized, speak)
+                true
+            }
+
+            "review mode", "review required", "review required mode" -> {
+                allowNextWakeGatedUtterance = false
+                updateDrivingModeByVoice(AgentMode.ReviewRequired, normalized, speak)
+                true
+            }
+
+            "normal mode" -> {
+                allowNextWakeGatedUtterance = false
+                updateDrivingModeByVoice(AgentMode.Normal, normalized, speak)
+                true
+            }
+
+            else -> false
+        }
+    }
+
+    private fun confirmNextQueuedAction(speak: (String) -> Unit, command: String) {
+        val action = _uiState.value.queuedActions.firstOrNull {
+            it.status == QueuedActionStatus.Queued
+        }
+
+        if (action == null) {
+            speakLocalFeedback("No queued actions to confirm.", speak, command = command)
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                queuedActions = it.queuedActions.map { queuedAction ->
+                    if (queuedAction.id == action.id) {
+                        queuedAction.copy(status = QueuedActionStatus.Confirmed)
+                    } else {
+                        queuedAction
+                    }
+                },
+                handsFreeSessionConfirmedActions = it.handsFreeSessionConfirmedActions + 1,
+                localQueueStatusMessage = "Locally confirmed: ${action.summary}",
+                lastVoiceCommand = command,
+                handsFreeSessionStatus = "Queued action confirmed locally"
+            )
+        }
+        speakLocalFeedback(
+            "Confirmed locally for later review. Nothing was executed.",
+            speak,
+            command = command
+        )
+    }
+
+    private fun cancelNextQueuedAction(speak: (String) -> Unit, command: String) {
+        val action = _uiState.value.queuedActions.firstOrNull {
+            it.status == QueuedActionStatus.Queued
+        }
+
+        if (action == null) {
+            speakLocalFeedback("No queued actions to cancel.", speak, command = command)
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                queuedActions = it.queuedActions.map { queuedAction ->
+                    if (queuedAction.id == action.id) {
+                        queuedAction.copy(status = QueuedActionStatus.Cancelled)
+                    } else {
+                        queuedAction
+                    }
+                },
+                handsFreeSessionCancelledActions = it.handsFreeSessionCancelledActions + 1,
+                localQueueStatusMessage = "Cancelled locally: ${action.summary}",
+                lastVoiceCommand = command,
+                handsFreeSessionStatus = "Queued action cancelled"
+            )
+        }
+        speakLocalFeedback("Cancelled.", speak, command = command)
+    }
+
+    private fun readQueuedActions(speak: (String) -> Unit, command: String) {
+        val pendingActions = _uiState.value.queuedActions.filter {
+            it.status == QueuedActionStatus.Queued
+        }
+
+        val message = if (pendingActions.isEmpty()) {
+            "No queued actions."
+        } else {
+            pendingActions
+                .take(3)
+                .joinToString(separator = ". ", prefix = "Queued actions: ") { it.summary }
+        }
+
+        speakLocalFeedback(message, speak, command = command)
+    }
+
+    private fun updateDrivingModeByVoice(
+        mode: AgentMode,
+        command: String,
+        speak: (String) -> Unit
+    ) {
+        _uiState.update {
+            it.copy(
+                drivingMode = mode,
+                connectionStatus = "Mode changed",
+                handsFreeSessionStatus = "Driving mode: ${mode.label}",
+                lastVoiceCommand = command
+            )
+        }
+        viewModelScope.launch {
+            settingsRepository.setDrivingMode(mode)
+        }
+        speakLocalFeedback("${mode.label.replaceFirstChar { it.uppercase() }} mode.", speak, command)
+    }
+
+    private fun requestHandsFreeRestart(
+        status: String,
+        sessionStatus: String,
+        command: String? = null,
+        ignoredTranscript: String? = null
+    ) {
+        _uiState.update {
+            it.copy(
+                isListening = false,
+                isLoading = false,
+                isSpeaking = false,
+                connectionStatus = status,
+                errorMessage = null,
+                lastVoiceCommand = command ?: it.lastVoiceCommand,
+                lastIgnoredTranscript = ignoredTranscript ?: it.lastIgnoredTranscript,
+                handsFreeRestartSignal = it.handsFreeRestartSignal + 1,
+                handsFreeSessionIgnoredUtterances = if (ignoredTranscript != null) {
+                    it.handsFreeSessionIgnoredUtterances + 1
+                } else {
+                    it.handsFreeSessionIgnoredUtterances
+                },
+                recentIgnoredUtterances = if (ignoredTranscript != null) {
+                    appendRecent(ignoredTranscript, it.recentIgnoredUtterances)
+                } else {
+                    it.recentIgnoredUtterances
+                },
+                handsFreeSessionStatus = sessionStatus
+            )
+        }
+    }
+
+    private fun speakLocalFeedback(
+        message: String,
+        speak: (String) -> Unit,
+        command: String
+    ) {
+        _uiState.update {
+            it.copy(
+                isListening = false,
+                isLoading = false,
+                errorMessage = null,
+                agentReply = message,
+                connectionStatus = "Local command",
+                lastVoiceCommand = command,
+                handsFreeSessionStatus = message
+            )
+        }
+        speak(message)
+    }
+
+    private fun buildHandsFreeSummary(state: MainUiState, reason: String): String {
+        return listOf(
+            reason,
+            "Turns: ${state.handsFreeTurns}",
+            "Queued: ${state.handsFreeSessionQueuedActions}",
+            "Confirmed: ${state.handsFreeSessionConfirmedActions}",
+            "Cancelled: ${state.handsFreeSessionCancelledActions}",
+            "Ignored: ${state.handsFreeSessionIgnoredUtterances}",
+            "Recoveries: ${state.handsFreeRecoveryCount}"
+        ).joinToString(". ")
+    }
+
+    private fun appendRecent(value: String, existing: List<String>): List<String> {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) {
+            return existing
+        }
+
+        return (listOf(trimmed) + existing).distinct().take(5)
+    }
+
+    private fun modeOverrideForDrivingPhrase(transcript: String): AgentMode? {
+        val normalized = normalizeVoiceText(transcript)
+        return when {
+            normalized.startsWith("capture this ") ||
+                normalized.startsWith("capture ") ||
+                normalized.startsWith("note this ") ||
+                normalized.startsWith("remember this ") -> AgentMode.CaptureOnly
+            normalized.startsWith("ask jynx ") ||
+                normalized.startsWith("ask jinx ") ||
+                normalized.startsWith("ask jinks ") -> AgentMode.Mobile
+            else -> null
+        }
+    }
+
+    private fun stripDrivingModePrefix(transcript: String): String {
+        return transcript
+            .replace(Regex("^\\s*capture\\s+this\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^\\s*capture\\b[\\s,.:;-]+", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^\\s*note\\s+this\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^\\s*remember\\s+this\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^\\s*ask\\s+(jynx|jinx|jinks)\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE), "")
+    }
+
+    private fun stripWakePhrase(transcript: String): String? {
+        val regex = Regex(
+            "^\\s*(hey\\s+|ok\\s+|okay\\s+)?(jynx|jinx|jinks)\\b[\\s,.:;!\\-]*",
+            RegexOption.IGNORE_CASE
+        )
+        val match = regex.find(transcript) ?: return null
+        return transcript.substring(match.range.last + 1).trim()
+    }
+
+    private fun normalizeVoiceText(transcript: String): String =
+        transcript
+            .trim()
+            .lowercase()
+            .replace(Regex("[^a-z0-9 ]"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+    private data class PreparedTranscript(
+        val transcript: String,
+        val modeOverride: AgentMode? = null
+    )
 
     fun onShortcutNotificationShown() {
         _uiState.update {

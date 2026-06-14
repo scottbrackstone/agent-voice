@@ -50,11 +50,14 @@ fun SettingsScreen(
     onTestConnection: () -> Unit,
     onSendMockTestPrompt: () -> Unit,
     onSendOpenClawTestPrompt: () -> Unit,
+    onSendHermesTestPrompt: () -> Unit,
     onShowDrivingNotification: () -> Unit,
     onHideDrivingNotification: () -> Unit,
     onStartInDrivingModeToggle: (Boolean) -> Unit,
     onKeepScreenAwakeToggle: (Boolean) -> Unit,
     onDrivingAutoSpeakToggle: (Boolean) -> Unit,
+    onDrivingRequireWakeWordToggle: (Boolean) -> Unit,
+    onDrivingUseVoxtralTranscriptionToggle: (Boolean) -> Unit,
     onDrivingModeSelected: (AgentMode) -> Unit,
     onAgentSelected: (ConnectorType) -> Unit,
     onClearHistory: () -> Unit,
@@ -154,6 +157,13 @@ fun SettingsScreen(
                         Text("OpenClaw")
                     }
                 }
+                OutlinedButton(
+                    onClick = onSendHermesTestPrompt,
+                    enabled = !uiState.isLoading,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Hermes")
+                }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -201,6 +211,16 @@ fun SettingsScreen(
                     checked = uiState.drivingAutoSpeak,
                     onCheckedChange = onDrivingAutoSpeakToggle
                 )
+                SettingSwitch(
+                    label = "Require Jynx trigger",
+                    checked = uiState.drivingRequireWakeWord,
+                    onCheckedChange = onDrivingRequireWakeWordToggle
+                )
+                SettingSwitch(
+                    label = "Use Voxtral transcription",
+                    checked = uiState.drivingUseVoxtralTranscription,
+                    onCheckedChange = onDrivingUseVoxtralTranscriptionToggle
+                )
             }
 
             DrivingModeSelector(
@@ -210,10 +230,19 @@ fun SettingsScreen(
 
             SettingValue("Default mode", uiState.mode.label)
             SettingValue("TTS", if (uiState.ttsEnabled) "enabled" else "disabled")
+            SettingValue(
+                "Driving STT",
+                if (uiState.drivingUseVoxtralTranscription) "Voxtral" else "Android"
+            )
             SettingValue("App version", uiState.appVersion)
             SettingValue("Last connector", uiState.lastConnector?.label ?: "none")
             SettingValue("Last request", uiState.lastRequestId ?: "none")
             SettingValue("Last error", uiState.lastErrorMessage ?: "none")
+            SettingValue("Last speech error", uiState.lastSpeechErrorMessage ?: "none")
+            SettingValue("Last relay error", uiState.lastRelayErrorMessage ?: "none")
+            SettingValue("Last voice command", uiState.lastVoiceCommand ?: "none")
+            SettingValue("Last ignored speech", uiState.lastIgnoredTranscript ?: "none")
+            SettingValue("Hands-free recoveries", uiState.handsFreeRecoveryCount.toString())
 
             Button(
                 onClick = onClearHistory,
@@ -291,7 +320,7 @@ private fun ConnectorSelector(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf(ConnectorType.Mock, ConnectorType.OpenClaw).forEach { agent ->
+            listOf(ConnectorType.Mock, ConnectorType.OpenClaw, ConnectorType.Hermes).forEach { agent ->
                 FilterChip(
                     selected = selectedAgent == agent,
                     onClick = { onAgentSelected(agent) },

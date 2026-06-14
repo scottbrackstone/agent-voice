@@ -95,8 +95,10 @@ Use this checklist after Stages 4 through 6:
 Use this checklist after installing the personal testing build:
 
 - Settings Test Connection succeeds against the relay URL.
+- Optional Voxtral transcription returns clear "not configured" errors until `MISTRAL_API_KEY` is set on the relay.
 - Mock test prompt returns a mock reply.
 - OpenClaw test prompt reaches OpenClaw through the relay.
+- Hermes appears as a connector option and returns a clear disabled/config error until `HERMES_ENABLED=true` and `HERMES_BASE_URL` are configured on the relay.
 - Typed message fallback sends and saves to history.
 - Copy transcript and copy reply work from the current response.
 - Speak again works when TTS is enabled and stays disabled when TTS is off.
@@ -112,9 +114,18 @@ Use this checklist after installing the personal testing build:
 - Driving behavior settings persist after app restart: Start in Driving mode, Keep screen awake, and Auto-read replies.
 - Driving mode default can be changed independently of the normal app mode.
 - Driving mode keeps the screen awake only when that setting is enabled.
+- Require Jynx trigger ignores normal speech and sends "Jynx, ..." requests.
+- Driving voice commands work for repeat, stop, capture-only, mobile, review, and normal mode.
+- Driving queued-action commands work locally for read queued actions, confirm, and cancel.
+- Use Voxtral transcription can be enabled for Driving Mode and leaves Android speech recognition as the fallback when disabled.
+- Stopping hands-free shows a session summary with turns, queued actions, ignored speech, and recoveries.
+- Driving mode shows recent captures, ignored utterances, and a compact command reference.
+- Settings diagnostics show last speech error, last relay error, last voice command, and ignored speech.
 - Driving mode shows recent replies without needing to open full history.
 - Long-pressing the launcher icon shows Talk to Jynx and Driving shortcuts.
 - No wake word or always-on listening behavior is present.
+
+For focused driving-mode reliability testing, use `docs/driving-test-checklist.md`.
 
 ## OpenClaw Connector Test Plan
 

@@ -91,6 +91,21 @@ fun DrivingScreen(
         ) {
             DrivingStatusCard(uiState)
 
+            uiState.handsFreeSessionSummary?.let { summary ->
+                DrivingCard {
+                    Text(
+                        "Session summary",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             HandsFreeSessionControls(
                 uiState = uiState,
                 onStartHandsFreeClick = onStartHandsFreeClick,
@@ -100,7 +115,9 @@ fun DrivingScreen(
 
             Button(
                 onClick = onTalkClick,
-                enabled = !uiState.isLoading && !uiState.isListening,
+                enabled = !uiState.isLoading &&
+                    !uiState.isListening &&
+                    !uiState.isTranscribingVoiceClip,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(112.dp),
@@ -115,7 +132,9 @@ fun DrivingScreen(
                 Spacer(Modifier.size(12.dp))
                 Text(
                     when {
-                        uiState.isLoading -> "Sending"
+                        uiState.isRecordingVoiceClip -> "Stop recording"
+                        uiState.isTranscribingVoiceClip -> "Transcribing"
+                        uiState.isLoading -> "Thinking"
                         uiState.isListening -> "Listening"
                         else -> "Talk"
                     },
@@ -124,7 +143,12 @@ fun DrivingScreen(
                 )
             }
 
-            if (uiState.isLoading || uiState.isListening) {
+            if (
+                uiState.isLoading ||
+                uiState.isListening ||
+                uiState.isRecordingVoiceClip ||
+                uiState.isTranscribingVoiceClip
+            ) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
@@ -174,6 +198,31 @@ fun DrivingScreen(
                 }
             }
 
+            if (uiState.queuedActions.isNotEmpty()) {
+                DrivingCard {
+                    Text(
+                        "Queued for review",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    uiState.localQueueStatusMessage?.let { status ->
+                        Text(
+                            status,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    uiState.queuedActions.take(3).forEach { action ->
+                        Text(
+                            "${action.summary} (${action.status.wireValue})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
             DrivingCard {
                 Text(
                     "Last capture",
@@ -193,6 +242,10 @@ fun DrivingScreen(
                 )
             }
 
+            SessionMemoryCard(uiState)
+
+            DrivingCommandsCard()
+
             RecentRepliesCard(
                 records = uiState.recentHistory
                     .filter { it.reply.isNotBlank() }
@@ -205,9 +258,13 @@ fun DrivingScreen(
 @Composable
 private fun DrivingStatusCard(uiState: MainUiState) {
     val statusText = when {
-        uiState.isHandsFreeSessionActive -> "Hands-free session active"
+        uiState.isSpeaking -> "Speaking"
+        uiState.isRecordingVoiceClip -> "Recording"
+        uiState.isTranscribingVoiceClip -> "Transcribing"
+        uiState.isListening && uiState.drivingRequireWakeWord -> "Listening for Jynx"
         uiState.isListening -> "Listening now"
-        uiState.isLoading -> "Sending to ${uiState.selectedAgent.label}"
+        uiState.isLoading -> "Thinking"
+        uiState.isHandsFreeSessionActive -> "Hands-free session active"
         else -> "Ready for ${uiState.selectedAgent.label}"
     }
 
@@ -219,18 +276,41 @@ private fun DrivingStatusCard(uiState: MainUiState) {
         )
                 Text(
                     when {
+                        uiState.isSpeaking ->
+                            "Tap Interrupt to speak now. Turns: ${uiState.handsFreeTurns}."
+                        uiState.isRecordingVoiceClip && uiState.drivingRequireWakeWord ->
+                            "Say Hey Jynx, then your request. Recording ends after a short silence."
+                        uiState.isRecordingVoiceClip ->
+                            "Speak naturally. Recording ends after a short silence."
+                        uiState.isTranscribingVoiceClip ->
+                            "Voxtral is transcribing your voice."
+                        uiState.isListening && uiState.drivingRequireWakeWord ->
+                            "Say Jynx before your request."
+                        uiState.isListening -> "Speak naturally."
+                        uiState.isLoading -> "Waiting for ${uiState.selectedAgent.label}."
                         uiState.isHandsFreeSessionActive ->
-                            if (uiState.isSpeaking) {
-                                "Tap Interrupt to speak now. Turns: ${uiState.handsFreeTurns}."
-                            } else {
-                                "${uiState.handsFreeSessionStatus ?: "Ready"}. Turns: ${uiState.handsFreeTurns}."
-                            }
-                        uiState.isListening -> "Speak your command."
-                        uiState.isLoading -> "Waiting for the relay."
+                            "${uiState.handsFreeSessionStatus ?: "Ready"}. Turns: ${uiState.handsFreeTurns}."
                         uiState.drivingAutoSpeak -> "Replies will be read aloud. Mode: ${uiState.drivingMode.label}."
                         else -> "Auto-read replies is off. Mode: ${uiState.drivingMode.label}."
                     },
             style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            "Activation: ${
+                if (uiState.drivingRequireWakeWord) {
+                    "say Jynx first"
+                } else {
+                    "always listen in session"
+                }
+            }${
+                if (uiState.drivingUseVoxtralTranscription) {
+                    ". STT: Voxtral"
+                } else {
+                    ". STT: Android"
+                }
+            }",
+            style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
@@ -299,6 +379,91 @@ private fun HandsFreeSessionControls(
                 "Start hands-free",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+private fun SessionMemoryCard(uiState: MainUiState) {
+    if (
+        uiState.recentHandsFreeCaptures.isEmpty() &&
+        uiState.recentIgnoredUtterances.isEmpty() &&
+        uiState.lastVoiceCommand.isNullOrBlank()
+    ) {
+        return
+    }
+
+    DrivingCard {
+        Text(
+            "Session memory",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        uiState.lastVoiceCommand?.let { command ->
+            Text(
+                "Command: $command",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (uiState.recentHandsFreeCaptures.isNotEmpty()) {
+            Text(
+                "Captured",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            uiState.recentHandsFreeCaptures.take(3).forEach { capture ->
+                Text(
+                    capture,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (uiState.recentIgnoredUtterances.isNotEmpty()) {
+            Text(
+                "Ignored",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            uiState.recentIgnoredUtterances.take(2).forEach { ignored ->
+                Text(
+                    ignored,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DrivingCommandsCard() {
+    DrivingCard {
+        Text(
+            "Voice commands",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        listOf(
+            "Jynx, capture this...",
+            "Jynx, read queued actions",
+            "Jynx, confirm",
+            "Jynx, cancel",
+            "Jynx, repeat that",
+            "Jynx, review mode",
+            "stop hands free"
+        ).forEach { command ->
+            Text(
+                command,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
