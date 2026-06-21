@@ -1,13 +1,13 @@
 # AgentVoice Roadmap
 
-This roadmap keeps AgentVoice focused on a safe voice layer for agents, not an OpenClaw-only client.
+This roadmap keeps AgentVoice focused on a safe voice layer for agents, not a single-agent client.
 
 ## Stage 0 - Product And Architecture Setup
 
 - Confirm project location and repo state.
 - Create or verify `.gitignore`.
 - Create architecture, roadmap, safety, privacy, threat model, and testing docs.
-- Define OpenClaw as connector number one.
+- Define connectors as replaceable relay adapters, with Hermes as the current primary connector.
 
 ## Stage 1 - Monorepo Setup
 
@@ -23,7 +23,7 @@ This roadmap keeps AgentVoice focused on a safe voice layer for agents, not an O
 - Add Zod validation.
 - Add generic connector interface.
 - Add MockConnector.
-- Add OpenClawConnector placeholder without inventing protocol details.
+- Add connector placeholders without inventing provider protocol details.
 - Add basic tests.
 
 ## Stage 3 - Android App Scaffold
@@ -59,12 +59,11 @@ This roadmap keeps AgentVoice focused on a safe voice layer for agents, not an O
 - Add local clear history option.
 - Make safety modes visible and send mode to relay.
 
-## Stage 7 - OpenClaw Connector
+## Stage 7 - Real Agent Connectors
 
-- Inspect real OpenClaw gateway documentation or local config.
-- Add OpenClaw relay config through environment variables.
-- Implement OpenClawConnector only after protocol details are known.
-- Keep the Android app unaware of OpenClaw protocol details.
+- Add Hermes relay config through environment variables.
+- Keep OpenClaw available as a manual connector path.
+- Keep the Android app unaware of provider-specific protocol details.
 
 ## Stage 8 - Personal Real-World Testing Build
 

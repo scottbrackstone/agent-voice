@@ -51,7 +51,7 @@ Mobile capture example:
 ```bash
 curl -X POST http://localhost:3001/api/message \
   -H "Content-Type: application/json" \
-  -d '{"agent":"mock","message":"Remind me to test OpenClaw tomorrow","mode":"mobile"}'
+  -d '{"agent":"hermes","message":"Remind me to test Hermes tomorrow","mode":"mobile"}'
 ```
 
 ## Android Build Commands
@@ -96,9 +96,9 @@ Use this checklist after installing the personal testing build:
 
 - Settings Test Connection succeeds against the relay URL.
 - Optional Voxtral transcription returns clear "not configured" errors until `MISTRAL_API_KEY` is set on the relay.
-- Mock test prompt returns a mock reply.
-- OpenClaw test prompt reaches OpenClaw through the relay.
-- Hermes appears as a connector option and returns a clear disabled/config error until `HERMES_ENABLED=true` and `HERMES_BASE_URL` are configured on the relay.
+- Hermes is the default connector and returns a clear disabled/config error until `HERMES_ENABLED=true` and `HERMES_BASE_URL` are configured on the relay.
+- Mock test prompt still returns a mock reply.
+- OpenClaw remains manually selectable for future connector testing.
 - Typed message fallback sends and saves to history.
 - Copy transcript and copy reply work from the current response.
 - Speak again works when TTS is enabled and stays disabled when TTS is off.
@@ -108,13 +108,13 @@ Use this checklist after installing the personal testing build:
 - The notification Talk action opens AgentVoice and starts a visible hands-free session after microphone permission is granted.
 - The Quick Settings tile can be added manually, then opens AgentVoice and starts a visible hands-free session.
 - Start hands-free in Driving mode, speak, wait for the reply, and confirm it starts listening again.
-- While Jynx is speaking in hands-free mode, tap Interrupt and confirm TTS stops and listening starts immediately.
+- While the assistant is speaking in hands-free mode, tap Interrupt and confirm TTS stops and listening starts immediately.
 - Stop hands-free and confirm TTS stops and the microphone is no longer listening.
 - Let a hands-free session run until the 10-minute timeout and confirm it stops.
 - Driving behavior settings persist after app restart: Start in Driving mode, Keep screen awake, and Auto-read replies.
 - Driving mode default can be changed independently of the normal app mode.
 - Driving mode keeps the screen awake only when that setting is enabled.
-- Require Jynx trigger ignores normal speech and sends "Jynx, ..." requests.
+- Require trigger phrase ignores normal speech and sends "Hermes, ..." requests.
 - Driving voice commands work for repeat, stop, capture-only, mobile, review, and normal mode.
 - Driving queued-action commands work locally for read queued actions, confirm, and cancel.
 - Use Voxtral transcription can be enabled for Driving Mode and leaves Android speech recognition as the fallback when disabled.
@@ -122,8 +122,8 @@ Use this checklist after installing the personal testing build:
 - Driving mode shows recent captures, ignored utterances, and a compact command reference.
 - Settings diagnostics show last speech error, last relay error, last voice command, and ignored speech.
 - Driving mode shows recent replies without needing to open full history.
-- Long-pressing the launcher icon shows Talk to Jynx and Driving shortcuts.
-- No wake word or always-on listening behavior is present.
+- Long-pressing the launcher icon shows Talk and Driving shortcuts.
+- No always-on listening behavior is present.
 
 For focused driving-mode reliability testing, use `docs/driving-test-checklist.md`.
 

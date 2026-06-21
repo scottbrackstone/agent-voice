@@ -149,10 +149,10 @@ class VoiceClipRecorder(
     }
 
     companion object {
-        const val DEFAULT_MAX_DURATION_MS = 12_000
+        const val DEFAULT_MAX_DURATION_MS = 60_000
         private const val MIN_RECORDING_MS = 1_100L
         private const val NO_SPEECH_TIMEOUT_MS = 3_000L
-        private const val SILENCE_AFTER_VOICE_MS = 850L
+        private const val SILENCE_AFTER_VOICE_MS = 2_500L
         private const val AMPLITUDE_POLL_MS = 120L
         private const val VOICE_AMPLITUDE_THRESHOLD = 1_200
     }

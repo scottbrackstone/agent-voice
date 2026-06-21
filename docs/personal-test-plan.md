@@ -7,7 +7,7 @@ Do not use this plan to add Stage 9 features. No wake word, always-on listening,
 ## Setup
 
 - Relay reachable from phone: `http://100.109.251.92:3001`.
-- OpenClaw Gateway running in WSL on port `18789`.
+- Hermes service reachable from the relay.
 - Start relay when needed:
 
 ```bash
@@ -24,8 +24,8 @@ wsl.exe bash -lc "systemctl --user stop agentvoice-relay.service"
 
 - Open the Android app.
 - Open Settings and tap Test Connection.
+- Confirm Hermes works through the relay.
 - Confirm Mock still works.
-- Confirm OpenClaw still works through the relay.
 - Send one typed message.
 - Send one voice message.
 - Turn TTS off and on.
@@ -34,11 +34,11 @@ wsl.exe bash -lc "systemctl --user stop agentvoice-relay.service"
 - Open one history item and confirm detail is readable.
 - Open Driving mode and confirm the large Talk button works.
 - Start a hands-free session, complete two turns, then tap Stop.
-- Interrupt Jynx mid-reply and confirm listening starts immediately.
+- Interrupt the assistant mid-reply and confirm listening starts immediately.
 - Add the Quick Settings tile and confirm it starts a visible hands-free session.
 - Show the driving notification shortcut and confirm Talk starts a visible hands-free session.
 - Toggle Start in Driving mode, Keep screen awake, and Auto-read replies.
-- Long-press the launcher icon and test Talk to Jynx and Driving shortcuts.
+- Long-press the launcher icon and test Talk and Driving shortcuts.
 
 ## Day 1 - First Pocket Test
 
@@ -55,11 +55,11 @@ wsl.exe bash -lc "systemctl --user stop agentvoice-relay.service"
 - Restart the relay and use Test Connection before sending another message.
 - Confirm Retry works after a failed message.
 
-## Day 3 - OpenClaw Reality Check
+## Day 3 - Hermes Reality Check
 
-- Select OpenClaw in Settings.
+- Select Hermes in Settings.
 - Send five real prompts that you would normally give from your PC.
-- Confirm Android never stores or asks for OpenClaw tokens.
+- Confirm Android never stores or asks for Hermes tokens.
 - Compare phone replies with the gateway behavior you expect.
 - Record any prompt types that need better mobile framing.
 
@@ -96,14 +96,14 @@ wsl.exe bash -lc "systemctl --user stop agentvoice-relay.service"
 - Review the week's notes.
 - Pick the top three fixes needed before Stage 9.
 - Decide whether the current relay URL and connector settings are comfortable for continued personal use.
-- Confirm Mock connector, OpenClaw connector, typed fallback, voice capture, TTS, copy actions, retry, history, Driving mode, Quick Settings tile, and notification shortcut all still work.
+- Confirm Hermes connector, Mock connector, typed fallback, voice capture, TTS, copy actions, retry, history, Driving mode, Quick Settings tile, and notification shortcut all still work.
 
 ## Notes Template
 
 For each issue, capture:
 
 - Date and time.
-- Connector: Mock or OpenClaw.
+- Connector: Hermes or Mock.
 - Mode.
 - Input type: voice or typed.
 - Network: Wi-Fi or mobile data.

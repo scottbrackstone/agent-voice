@@ -243,7 +243,7 @@ class RelayClient(
 
     companion object {
         private const val SEND_TIMEOUT_MS = 45_000L
-        private const val TRANSCRIBE_TIMEOUT_MS = 40_000L
+        private const val TRANSCRIBE_TIMEOUT_MS = 90_000L
     }
 }
 

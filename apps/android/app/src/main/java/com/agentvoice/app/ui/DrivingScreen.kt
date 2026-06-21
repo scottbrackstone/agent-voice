@@ -61,7 +61,7 @@ fun DrivingScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Jynx", fontWeight = FontWeight.SemiBold)
+                        Text(uiState.selectedAgent.label, fontWeight = FontWeight.SemiBold)
                         Text(
                             uiState.connectionStatus,
                             style = MaterialTheme.typography.labelMedium,
@@ -261,7 +261,7 @@ private fun DrivingStatusCard(uiState: MainUiState) {
         uiState.isSpeaking -> "Speaking"
         uiState.isRecordingVoiceClip -> "Recording"
         uiState.isTranscribingVoiceClip -> "Transcribing"
-        uiState.isListening && uiState.drivingRequireWakeWord -> "Listening for Jynx"
+        uiState.isListening && uiState.drivingRequireWakeWord -> "Listening for trigger phrase"
         uiState.isListening -> "Listening now"
         uiState.isLoading -> "Thinking"
         uiState.isHandsFreeSessionActive -> "Hands-free session active"
@@ -279,13 +279,13 @@ private fun DrivingStatusCard(uiState: MainUiState) {
                         uiState.isSpeaking ->
                             "Tap Interrupt to speak now. Turns: ${uiState.handsFreeTurns}."
                         uiState.isRecordingVoiceClip && uiState.drivingRequireWakeWord ->
-                            "Say Hey Jynx, then your request. Recording ends after a short silence."
+                            "Say the trigger phrase, then your request. Recording ends after a short silence."
                         uiState.isRecordingVoiceClip ->
                             "Speak naturally. Recording ends after a short silence."
                         uiState.isTranscribingVoiceClip ->
                             "Voxtral is transcribing your voice."
                         uiState.isListening && uiState.drivingRequireWakeWord ->
-                            "Say Jynx before your request."
+                            "Say the trigger phrase before your request."
                         uiState.isListening -> "Speak naturally."
                         uiState.isLoading -> "Waiting for ${uiState.selectedAgent.label}."
                         uiState.isHandsFreeSessionActive ->
@@ -299,7 +299,7 @@ private fun DrivingStatusCard(uiState: MainUiState) {
         Text(
             "Activation: ${
                 if (uiState.drivingRequireWakeWord) {
-                    "say Jynx first"
+                    "say trigger phrase first"
                 } else {
                     "always listen in session"
                 }
@@ -452,12 +452,12 @@ private fun DrivingCommandsCard() {
             fontWeight = FontWeight.SemiBold
         )
         listOf(
-            "Jynx, capture this...",
-            "Jynx, read queued actions",
-            "Jynx, confirm",
-            "Jynx, cancel",
-            "Jynx, repeat that",
-            "Jynx, review mode",
+            "trigger phrase, capture this...",
+            "trigger phrase, read queued actions",
+            "trigger phrase, confirm",
+            "trigger phrase, cancel",
+            "trigger phrase, repeat that",
+            "trigger phrase, review mode",
             "stop hands free"
         ).forEach { command ->
             Text(

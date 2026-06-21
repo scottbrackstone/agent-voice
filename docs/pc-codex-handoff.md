@@ -1,10 +1,10 @@
 # PC Codex Handoff
 
-This file gives a fresh Codex session on the OpenClaw PC enough context to continue AgentVoice setup.
+This file gives a fresh Codex session on the PC enough context to continue AgentVoice setup.
 
 ## Current Product State
 
-AgentVoice is a native Android voice layer for AI agents. It is not an OpenClaw-only app. OpenClaw is connector number one behind the relay connector interface.
+AgentVoice is a native Android voice layer for AI agents. Hermes is the current primary connector behind the relay connector interface. OpenClaw remains available as a manual connector path.
 
 Implemented so far:
 
@@ -16,7 +16,8 @@ Implemented so far:
 - Android DataStore settings
 - Android Room local history
 - Safety modes and queued action display
-- OpenClaw connector registered behind `AgentConnector`
+- Hermes connector registered behind `AgentConnector`
+- OpenClaw connector preserved behind `AgentConnector`
 - Clear local-dev HTTP support for Android LAN testing
 
 Reference docs:
@@ -25,28 +26,34 @@ Reference docs:
 - `docs/safety.md`
 - `docs/privacy.md`
 - `docs/testing.md`
+- `docs/hermes-connector.md`
 - `docs/openclaw-connector.md`
 
-## Important Current Limitation
+## Current Hermes Integration Path
 
-The OpenClaw connector is intentionally not pretending to send real messages yet.
-
-Local inspection on the Mac only found this OpenCLAW Companion contract:
-
-- `GET /events`
-- `POST /feedback`
-
-Those endpoints are not enough for AgentVoice voice command -> agent reply.
-
-The missing piece is the actual OpenClaw message Gateway API, for example something like:
+The Hermes connector assumes an OpenAI-compatible HTTP endpoint:
 
 ```text
-POST /message
-body: { "message": "...", "mode": "mobile" }
-response: { "reply": "..." }
+POST /v1/chat/completions
 ```
 
-Do not invent the protocol. Inspect the PC/OpenClaw setup and wire only the real endpoint.
+Keep the Hermes token/password only in AgentVoice Relay environment variables. Do not put it in the Android app.
+
+## Optional OpenClaw Integration Path
+
+The OpenClaw connector now uses the documented OpenClaw Gateway OpenAI-compatible HTTP endpoint:
+
+```text
+POST /v1/chat/completions
+```
+
+The endpoint is disabled by default in OpenClaw. Enable it in OpenClaw config and restart the Gateway:
+
+```powershell
+openclaw config set gateway.http.endpoints.chatCompletions.enabled true
+```
+
+Keep the OpenClaw token/password only in AgentVoice Relay environment variables. Do not put it in the Android app.
 
 ## PC Setup
 
@@ -67,8 +74,10 @@ npm install
 Run relay on the PC:
 
 ```powershell
-$env:OPENCLAW_ENABLED="true"
-$env:OPENCLAW_GATEWAY_URL="http://localhost:YOUR_OPENCLAW_PORT"
+$env:HERMES_ENABLED="true"
+$env:HERMES_BASE_URL="http://localhost:YOUR_HERMES_PORT"
+$env:HERMES_TOKEN="YOUR_HERMES_TOKEN_OR_PASSWORD"
+$env:HERMES_MODEL="hermes"
 $env:HOST="0.0.0.0"
 $env:PORT="3001"
 npm run dev
@@ -78,22 +87,20 @@ Then set Android app:
 
 ```text
 Backend URL = http://PC_IP_OR_TAILSCALE_IP:3001
-Connector = openclaw
+Connector = hermes
 ```
 
 Windows Firewall may need an inbound allow rule for port `3001`.
 
 ## What To Inspect On The PC
 
-Find the OpenClaw service/Gateway details:
+Find or verify the Hermes service details:
 
 - process name and command
 - listening ports
 - local config files
-- HTTP routes or WebSocket protocol
-- auth/token requirements
-- message endpoint request shape
-- message endpoint response shape
+- HTTP chat completions endpoint enabled or equivalent Hermes route
+- auth token/password requirements
 
 Useful checks:
 
@@ -101,13 +108,13 @@ Useful checks:
 netstat -ano | findstr LISTENING
 ```
 
-Try known companion endpoint if relevant:
+Try the Hermes HTTP endpoint if enabled:
 
 ```powershell
-curl http://localhost:YOUR_OPENCLAW_PORT/events
+curl http://localhost:YOUR_HERMES_PORT/v1/models
 ```
 
-Then search the OpenClaw files for likely route names:
+Then search the Hermes files for likely route names:
 
 ```powershell
 findstr /S /I "message chat prompt gateway events feedback" *.*
@@ -131,7 +138,7 @@ Current Mac validation before handoff:
 
 ## Suggested Skills
 
-- `diagnose` if the PC relay or OpenClaw connectivity fails.
+- `diagnose` if the PC relay or Hermes connectivity fails.
 - `github:github` if repository or commit context is needed.
 - `zoom-out` if the agent needs to re-orient around the product architecture.
 

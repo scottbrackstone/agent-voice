@@ -66,7 +66,7 @@ data class MainUiState(
     val selectedHistory: ConversationRecord? = null,
     val backendUrl: String = SettingsRepository.DEFAULT_BACKEND_URL,
     val backendUrlDraft: String = SettingsRepository.DEFAULT_BACKEND_URL,
-    val selectedAgent: ConnectorType = ConnectorType.Mock,
+    val selectedAgent: ConnectorType = SettingsRepository.DEFAULT_SELECTED_AGENT,
     val showSettings: Boolean = false,
     val isDrivingMode: Boolean = false,
     val appVersion: String = "unknown",
@@ -96,6 +96,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         _uiState.update { it.copy(appVersion = resolveAppVersion(application)) }
+
+        viewModelScope.launch {
+            settingsRepository.migrateDefaultAgentToHermes()
+        }
 
         viewModelScope.launch {
             settingsRepository.settings.collect { settings ->
@@ -151,7 +155,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = null,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
                     if (it.drivingRequireWakeWord && !allowNextWakeGatedUtterance) {
-                        "Listening for Jynx"
+                        "Listening for trigger phrase"
                     } else {
                         "Listening"
                     }
@@ -203,7 +207,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 },
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
                     if (it.drivingRequireWakeWord) {
-                        "Recording. Say Hey Jynx, then your request"
+                        "Recording. Say the trigger phrase, then your request"
                     } else {
                         "Recording"
                     }
@@ -709,7 +713,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 recentIgnoredUtterances = emptyList(),
                 localQueueStatusMessage = null,
                 handsFreeSessionStatus = if (it.drivingRequireWakeWord) {
-                    "Starting. Say Jynx first"
+                    "Starting. Say the trigger phrase first"
                 } else {
                     "Starting"
                 }
@@ -742,7 +746,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 isSpeaking = true,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
-                    "Jynx is speaking"
+                    "${it.selectedAgent.label} is speaking"
                 } else {
                     it.handsFreeSessionStatus
                 }
@@ -756,7 +760,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isSpeaking = false,
                 handsFreeSessionStatus = if (it.isHandsFreeSessionActive) {
                     if (it.drivingRequireWakeWord) {
-                        "Preparing to listen for Jynx"
+                        "Preparing to listen for trigger phrase"
                     } else {
                         "Preparing to listen"
                     }
@@ -772,7 +776,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (it.isHandsFreeSessionActive) {
                 it.copy(
                     handsFreeSessionStatus = if (it.drivingRequireWakeWord) {
-                        "Ready. Say Jynx first"
+                        "Ready. Say the trigger phrase first"
                     } else {
                         "Ready for next turn"
                     }
@@ -799,17 +803,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (hasWakePhrase && message.isBlank()) {
                 allowNextWakeGatedUtterance = true
                 requestHandsFreeRestart(
-                    status = "Jynx heard",
+                    status = "Trigger phrase heard",
                     sessionStatus = "Listening for your request",
-                    command = "Jynx"
+                    command = "trigger phrase"
                 )
                 return null
             }
 
             if (!hasWakePhrase && !allowNextWakeGatedUtterance) {
                 requestHandsFreeRestart(
-                    status = "Waiting for Jynx",
-                    sessionStatus = "Ignored. Say Jynx first",
+                    status = "Waiting for trigger phrase",
+                    sessionStatus = "Ignored. Say the trigger phrase first",
                     ignoredTranscript = transcript
                 )
                 return null
@@ -863,7 +867,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return when (normalized) {
             "wait", "hold on", "pause", "pause listening" -> {
                 allowNextWakeGatedUtterance = false
-                speakLocalFeedback("Paused. Say Jynx when you are ready.", speak, command = normalized)
+                speakLocalFeedback(
+                    "Paused. Say the trigger phrase when you are ready.",
+                    speak,
+                    command = normalized
+                )
                 true
             }
 
@@ -1121,9 +1129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 normalized.startsWith("capture ") ||
                 normalized.startsWith("note this ") ||
                 normalized.startsWith("remember this ") -> AgentMode.CaptureOnly
-            normalized.startsWith("ask jynx ") ||
-                normalized.startsWith("ask jinx ") ||
-                normalized.startsWith("ask jinks ") -> AgentMode.Mobile
+            normalized.startsWith("ask hermes ") -> AgentMode.Mobile
             else -> null
         }
     }
@@ -1134,12 +1140,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .replace(Regex("^\\s*capture\\b[\\s,.:;-]+", RegexOption.IGNORE_CASE), "")
             .replace(Regex("^\\s*note\\s+this\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE), "")
             .replace(Regex("^\\s*remember\\s+this\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("^\\s*ask\\s+(jynx|jinx|jinks)\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE), "")
+            .replace(
+                Regex("^\\s*ask\\s+hermes\\b[\\s,.:;-]*", RegexOption.IGNORE_CASE),
+                ""
+            )
     }
 
     private fun stripWakePhrase(transcript: String): String? {
         val regex = Regex(
-            "^\\s*(hey\\s+|ok\\s+|okay\\s+)?(jynx|jinx|jinks)\\b[\\s,.:;!\\-]*",
+            "^\\s*(hey\\s+|ok\\s+|okay\\s+)?hermes\\b[\\s,.:;!\\-]*",
             RegexOption.IGNORE_CASE
         )
         val match = regex.find(transcript) ?: return null

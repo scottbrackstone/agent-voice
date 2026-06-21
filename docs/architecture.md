@@ -1,6 +1,6 @@
 # AgentVoice Architecture
 
-AgentVoice is a voice-first communication layer for AI agents. The product is not an OpenClaw-only voice app. OpenClaw is the first connector, while the long-term architecture supports multiple agent backends such as OpenClaw, Hermes, Telegram bots, webhooks, and custom business agents.
+AgentVoice is a voice-first communication layer for AI agents. The product is not a Hermes-only voice app. Hermes is the current primary connector, while the long-term architecture supports multiple agent backends such as OpenClaw, Telegram bots, webhooks, and custom business agents.
 
 The product principle is: Capture now. Confirm later.
 
@@ -16,7 +16,7 @@ The Android app captures speech, turns it into text, sends structured requests t
 
 The relay owns backend validation, request IDs, connector selection, response shaping, safety-aware behavior, and future integration with cloud services.
 
-Connectors translate the generic AgentVoice message contract into provider-specific agent calls. OpenClaw lives behind this connector boundary.
+Connectors translate the generic AgentVoice message contract into provider-specific agent calls. Hermes and OpenClaw both live behind this connector boundary.
 
 ## Android App Responsibilities
 
@@ -34,7 +34,7 @@ The Android app must not:
 
 - Store raw audio by default.
 - Include service-role keys or backend secrets.
-- Know OpenClaw protocol details.
+- Know Hermes or OpenClaw protocol details.
 - Execute risky actions directly.
 - Use wake-word or always-on listening in the MVP.
 
@@ -54,11 +54,11 @@ The relay backend is responsible for:
 
 The relay is intentionally separate from the Android app so agent protocols, credentials, routing, logging, and safety behavior can evolve without shipping a new mobile client for every backend change.
 
-## OpenClaw As A Connector
+## Agent Backends As Connectors
 
-OpenClaw is connector number one, not the product identity.
+Hermes is the current primary connector, not the product identity.
 
-This keeps AgentVoice positioned as a reusable voice layer for agents. The connector boundary lets the relay support OpenClaw first while preserving room for Hermes, generic webhooks, Telegram bots, and custom business agents.
+This keeps AgentVoice positioned as a reusable voice layer for agents. The connector boundary lets the relay use Hermes today while preserving room for OpenClaw, generic webhooks, Telegram bots, and custom business agents.
 
 The Android app sends:
 
@@ -70,7 +70,7 @@ The Android app sends:
 }
 ```
 
-It should not know whether the relay calls OpenClaw over HTTP, WebSocket, a local gateway, or a future hosted service.
+It should not know whether the relay calls Hermes, OpenClaw, a webhook, or a future hosted service.
 
 ## Android To Relay Flow
 

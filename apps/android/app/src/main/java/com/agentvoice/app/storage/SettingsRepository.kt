@@ -14,7 +14,7 @@ private val Context.settingsDataStore by preferencesDataStore(name = "agentvoice
 
 data class AppSettings(
     val backendUrl: String = SettingsRepository.DEFAULT_BACKEND_URL,
-    val selectedAgent: ConnectorType = ConnectorType.Mock,
+    val selectedAgent: ConnectorType = SettingsRepository.DEFAULT_SELECTED_AGENT,
     val defaultMode: AgentMode = AgentMode.Normal,
     val ttsEnabled: Boolean = true,
     val startInDrivingMode: Boolean = false,
@@ -30,7 +30,8 @@ class SettingsRepository(private val context: Context) {
         AppSettings(
             backendUrl = preferences[BACKEND_URL] ?: DEFAULT_BACKEND_URL,
             selectedAgent = ConnectorType.fromValue(
-                preferences[SELECTED_AGENT] ?: ConnectorType.Mock.value
+                preferences[SELECTED_AGENT] ?: DEFAULT_SELECTED_AGENT.value,
+                fallback = DEFAULT_SELECTED_AGENT
             ),
             defaultMode = AgentMode.fromWireValue(
                 preferences[DEFAULT_MODE] ?: AgentMode.Normal.wireValue
@@ -57,6 +58,25 @@ class SettingsRepository(private val context: Context) {
     suspend fun setSelectedAgent(agent: ConnectorType) {
         context.settingsDataStore.edit { preferences ->
             preferences[SELECTED_AGENT] = agent.value
+        }
+    }
+
+    suspend fun migrateDefaultAgentToHermes() {
+        context.settingsDataStore.edit { preferences ->
+            if (preferences[HERMES_DEFAULT_MIGRATION_COMPLETE] == true) {
+                return@edit
+            }
+
+            val selectedAgent = preferences[SELECTED_AGENT]
+            if (
+                selectedAgent == null ||
+                selectedAgent == ConnectorType.Mock.value ||
+                selectedAgent == ConnectorType.OpenClaw.value ||
+                ConnectorType.entries.none { it.value == selectedAgent }
+            ) {
+                preferences[SELECTED_AGENT] = DEFAULT_SELECTED_AGENT.value
+            }
+            preferences[HERMES_DEFAULT_MIGRATION_COMPLETE] = true
         }
     }
 
@@ -110,9 +130,12 @@ class SettingsRepository(private val context: Context) {
 
     companion object {
         const val DEFAULT_BACKEND_URL = "http://10.0.2.2:3001"
+        val DEFAULT_SELECTED_AGENT = ConnectorType.Hermes
 
         private val BACKEND_URL = stringPreferencesKey("backend_url")
         private val SELECTED_AGENT = stringPreferencesKey("selected_agent")
+        private val HERMES_DEFAULT_MIGRATION_COMPLETE =
+            booleanPreferencesKey("hermes_default_migration_complete")
         private val DEFAULT_MODE = stringPreferencesKey("default_mode")
         private val TTS_ENABLED = booleanPreferencesKey("tts_enabled")
         private val START_IN_DRIVING_MODE = booleanPreferencesKey("start_in_driving_mode")

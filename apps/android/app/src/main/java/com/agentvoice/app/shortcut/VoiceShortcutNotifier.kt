@@ -39,7 +39,7 @@ class VoiceShortcutNotifier(private val context: Context) {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_agentvoice_notification)
-            .setContentTitle("Talk to Jynx")
+            .setContentTitle("Talk to AgentVoice")
             .setContentText("Starts a visible hands-free driving session.")
             .setContentIntent(pendingActivity(openIntent, REQUEST_OPEN))
             .addAction(

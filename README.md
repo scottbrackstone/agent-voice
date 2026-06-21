@@ -2,7 +2,7 @@
 
 AgentVoice is a native Android voice layer for AI agents.
 
-The first connector target is OpenClaw, but AgentVoice is not an OpenClaw-only app. It is designed as a cross-agent, business-safe communication layer for mobile workers, agent power users, and businesses that need hands-free capture and review workflows.
+The current primary connector target is Hermes. AgentVoice is not a Hermes-only app: OpenClaw remains available as a manual connector path, and the architecture is designed as a cross-agent, business-safe communication layer for mobile workers, agent power users, and businesses that need hands-free capture and review workflows.
 
 Core principle:
 
@@ -99,7 +99,7 @@ Stages 0 through 6 are implemented:
 - Product architecture and safety docs.
 - Monorepo structure.
 - Fastify TypeScript relay with mock connector.
-- OpenClaw connector placeholder behind the connector abstraction.
+- Hermes connector behind the connector abstraction, with OpenClaw preserved as a manual connector.
 - Native Android Compose app.
 - Push-to-talk SpeechRecognizer loop.
 - Android TextToSpeech replies.

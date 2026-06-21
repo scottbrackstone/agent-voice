@@ -44,7 +44,7 @@ export function registerTranscribeRoute(server: FastifyInstance): void {
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(),
-      Number(process.env.VOXTRAL_TRANSCRIBE_TIMEOUT_MS ?? 30_000)
+      Number(process.env.VOXTRAL_TRANSCRIBE_TIMEOUT_MS ?? 90_000)
     );
 
     try {

@@ -11,7 +11,7 @@ class AgentVoiceTileService : TileService() {
     override fun onStartListening() {
         super.onStartListening()
         qsTile?.apply {
-            label = "Jynx"
+            label = "AgentVoice"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 subtitle = "Tap to talk"
             }

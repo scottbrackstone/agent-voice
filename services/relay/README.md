@@ -2,7 +2,7 @@
 
 The AgentVoice relay is a TypeScript Fastify service that gives the Android app one stable API while keeping provider-specific agent protocols behind connector implementations.
 
-OpenClaw is the first planned real connector, but the relay is intentionally generic.
+Hermes is the current primary connector, but the relay is intentionally generic. OpenClaw remains available as a manual connector path.
 
 ## Commands
 
@@ -35,7 +35,7 @@ Mobile capture:
 ```bash
 curl -X POST http://localhost:3001/api/message \
   -H "Content-Type: application/json" \
-  -d '{"agent":"mock","message":"Remind me to test OpenClaw tomorrow","mode":"mobile"}'
+  -d '{"agent":"hermes","message":"Remind me to test Hermes tomorrow","mode":"mobile"}'
 ```
 
 ## Safety Shape

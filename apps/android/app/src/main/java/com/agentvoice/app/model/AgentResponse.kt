@@ -30,7 +30,7 @@ enum class ConnectorType(val value: String, val label: String) {
     Hermes("hermes", "Hermes");
 
     companion object {
-        fun fromValue(value: String): ConnectorType =
-            entries.firstOrNull { it.value == value } ?: Mock
+        fun fromValue(value: String, fallback: ConnectorType = Mock): ConnectorType =
+            entries.firstOrNull { it.value == value } ?: fallback
     }
 }

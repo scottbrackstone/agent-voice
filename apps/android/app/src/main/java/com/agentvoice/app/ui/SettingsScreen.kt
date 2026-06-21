@@ -143,26 +143,26 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Button(
+                        onClick = onSendHermesTestPrompt,
+                        enabled = !uiState.isLoading,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Hermes")
+                    }
+                    OutlinedButton(
                         onClick = onSendMockTestPrompt,
                         enabled = !uiState.isLoading,
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Mock")
                     }
-                    OutlinedButton(
-                        onClick = onSendOpenClawTestPrompt,
-                        enabled = !uiState.isLoading,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("OpenClaw")
-                    }
                 }
                 OutlinedButton(
-                    onClick = onSendHermesTestPrompt,
+                    onClick = onSendOpenClawTestPrompt,
                     enabled = !uiState.isLoading,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Hermes")
+                    Text("OpenClaw")
                 }
             }
 
@@ -212,7 +212,7 @@ fun SettingsScreen(
                     onCheckedChange = onDrivingAutoSpeakToggle
                 )
                 SettingSwitch(
-                    label = "Require Jynx trigger",
+                    label = "Require trigger phrase",
                     checked = uiState.drivingRequireWakeWord,
                     onCheckedChange = onDrivingRequireWakeWordToggle
                 )
@@ -320,7 +320,7 @@ private fun ConnectorSelector(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf(ConnectorType.Mock, ConnectorType.OpenClaw, ConnectorType.Hermes).forEach { agent ->
+            listOf(ConnectorType.Hermes, ConnectorType.Mock, ConnectorType.OpenClaw).forEach { agent ->
                 FilterChip(
                     selected = selectedAgent == agent,
                     onClick = { onAgentSelected(agent) },
