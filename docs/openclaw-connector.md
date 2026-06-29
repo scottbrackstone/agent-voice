@@ -4,23 +4,25 @@ Stage 7 keeps OpenClaw behind the AgentVoice relay connector interface. The Andr
 
 ## Local Inspection Findings
 
-I inspected the local environment for OpenClaw docs/config/repos.
+The Windows/WSL test machine has OpenClaw Gateway running as:
 
-Found:
+```text
+openclaw gateway --port 18789
+```
 
-- `/Users/scott/Dev/Portfolio/OpenclawTamagotchi`
-- `SPEC.md`
-- `app/src/main/java/com/openclaw/companion/data/api/OpenCLAWApi.kt`
-- `app/src/main/java/com/openclaw/companion/data/repository/OpenCLAWRepository.kt`
+OpenClaw documents an OpenAI-compatible HTTP surface on the Gateway:
 
-The available local contract is for an OpenCLAW Companion/Tamagotchi app:
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
 
-- `GET /events`
-- `POST /feedback`
+The chat completions endpoint is disabled by default and must be enabled in OpenClaw config before live AgentVoice use:
 
-That contract is useful for receiving "did good" events and sending pet/treat/not_good feedback, but it does not define how to send a user message to an OpenClaw agent or how to receive an agent reply.
+```bash
+openclaw config set gateway.http.endpoints.chatCompletions.enabled true
+```
 
-No running OpenClaw/Gateway process was found in the local process list.
+The current Gateway auth mode is token-based, so AgentVoice Relay must hold the Gateway token server-side and send it as a bearer token. Do not put this token in the Android app.
 
 ## Current Connector Behavior
 
@@ -35,11 +37,12 @@ It now:
 - Reads environment-based config.
 - Validates that the connector is enabled.
 - Validates the Gateway URL.
-- Optionally probes the known companion `GET /events` endpoint when enabled.
-- Returns a clear failed `AgentResponse` when the message protocol is missing.
+- Sends user text to OpenClaw `POST /v1/chat/completions`.
+- Maps the OpenAI-compatible assistant message into AgentVoice `AgentResponse.reply`.
+- Sends an AgentVoice safety/system instruction with the selected mode.
 - Keeps `MockConnector` untouched.
 
-It does not invent an OpenClaw message protocol.
+It does not expose the OpenClaw token to Android. Android still only talks to AgentVoice Relay.
 
 ## Relay Environment Variables
 
@@ -47,56 +50,51 @@ It does not invent an OpenClaw message protocol.
 OPENCLAW_ENABLED=false
 OPENCLAW_GATEWAY_URL=
 OPENCLAW_TOKEN=
+OPENCLAW_MODEL=openclaw
+OPENCLAW_USER=agentvoice-mobile
+OPENCLAW_SESSION_KEY=
+OPENCLAW_AGENT_ID=
 OPENCLAW_TIMEOUT_MS=10000
 ```
 
-`OPENCLAW_TOKEN` is accepted for future authenticated Gateway support. If present, the current probe sends it as a bearer token. The actual message auth contract still needs confirmation.
+`OPENCLAW_TOKEN` is the OpenClaw Gateway token/password for HTTP bearer auth. `OPENCLAW_MODEL` should usually be `openclaw` or `openclaw/default`. Set `OPENCLAW_AGENT_ID` only if you want to force a specific OpenClaw agent. Set `OPENCLAW_SESSION_KEY` if you want all AgentVoice turns to share an explicit OpenClaw session.
 
-## What Is Still Needed
+## What Is Still Needed For Phone Testing
 
-To make AgentVoice talk to a real OpenClaw agent, provide or implement an OpenClaw Gateway message contract with:
+- Enable OpenClaw `gateway.http.endpoints.chatCompletions.enabled`.
+- Start AgentVoice Relay on a LAN-reachable host and port, for example `0.0.0.0:3001`.
+- Set the Android app backend URL to the PC LAN or tailnet address for AgentVoice Relay, not to OpenClaw directly.
+- Select the OpenClaw connector in AgentVoice settings.
 
-- Base Gateway URL.
-- Auth method.
-- Token/header shape, if required.
-- Message endpoint path.
-- Request JSON shape.
-- Response JSON shape.
-- Timeout behavior.
-- Error response shape.
-- Whether the protocol is HTTP request/response, WebSocket, or something else.
+## Manual Gateway Checks
 
-AgentVoice needs a contract that can carry at least:
+The OpenClaw endpoint should not return the Control UI HTML when enabled. With the token supplied, this should return JSON:
 
-```json
-{
-  "message": "string",
-  "mode": "normal | mobile | capture_only | review_required",
-  "conversationId": "optional string",
-  "requestId": "string"
-}
+```bash
+curl -sS http://127.0.0.1:18789/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openclaw",
+    "user": "agentvoice-mobile",
+    "messages": [
+      { "role": "user", "content": "Say a short hello from OpenClaw." }
+    ]
+  }'
 ```
 
-And return enough data to build:
+## AgentVoice Relay Test Command
 
-```json
-{
-  "reply": "string",
-  "status": "completed | queued | failed | partial",
-  "queuedActions": [],
-  "warnings": []
-}
-```
-
-The relay can then map that provider response into the generic AgentVoice `AgentResponse`.
-
-## Current Test Command
-
-With no message protocol available, this should return a clear failure:
+With the relay running and OpenClaw env configured:
 
 ```bash
 curl -X POST http://localhost:3001/api/message \
   -H "Content-Type: application/json" \
   -d '{"agent":"openclaw","message":"What should I do next?","mode":"normal"}'
 ```
+
+Expected result:
+
+- `status: "completed"` and a real OpenClaw reply, or
+- a clear `failed` AgentVoice response explaining Gateway auth/config/endpoint errors.
 

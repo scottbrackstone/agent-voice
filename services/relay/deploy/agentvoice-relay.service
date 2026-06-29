@@ -1,0 +1,14 @@
+[Unit]
+Description=AgentVoice Relay
+After=network-online.target openclaw-gateway.service
+Wants=network-online.target openclaw-gateway.service
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/e/Github/pulls/agent-voice/services/relay
+ExecStart=/bin/bash /mnt/e/Github/pulls/agent-voice/services/relay/scripts/start-agentvoice-relay-wsl.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
