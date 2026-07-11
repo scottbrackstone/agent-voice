@@ -1,0 +1,1003 @@
+{
+  "version": 1,
+  "source": "Hermes Agent COMMAND_REGISTRY + list_picker_providers (live)",
+  "generated": "2026-07-03",
+  "commands": [
+    {
+      "name": "/stop",
+      "label": "Stop",
+      "description": "Kill all running background processes",
+      "template": "/stop",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/new",
+      "label": "New Session",
+      "description": "Start a new session (fresh session ID + history)",
+      "template": "/new {name}",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": ["/reset"],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "name",
+          "label": "Session name (optional)",
+          "type": "text",
+          "required": false,
+          "placeholder": "e.g. debugging-auth"
+        }
+      ]
+    },
+    {
+      "name": "/status",
+      "label": "Status",
+      "description": "Show session, model, token, and context info",
+      "template": "/status",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/help",
+      "label": "Help",
+      "description": "Show available commands",
+      "template": "/help",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/model",
+      "label": "Switch Model",
+      "description": "Switch model (persists by default)",
+      "template": "/model {provider} {model}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "metadata": {
+        "currentProvider": "DeepSeek",
+        "currentModel": "deepseek-v4-pro",
+        "providerSlug": "deepseek"
+      },
+      "steps": [
+        {
+          "id": "provider",
+          "label": "Select a provider",
+          "type": "single_select",
+          "options": [
+            { "label": "DeepSeek (4)", "value": "--provider deepseek", "selected": true },
+            { "label": "OpenRouter (29)", "value": "--provider openrouter", "selected": false },
+            { "label": "xAI (9)", "value": "--provider xai", "selected": false },
+            { "label": "openrouter (2)", "value": "--provider custom:openrouter", "selected": false, "description": "Custom endpoint: MiMo models" },
+            { "label": "qwen3.5:9b (1)", "value": "--provider custom:qwen3.5:9b", "selected": false, "description": "Custom endpoint: Local Ollama" },
+            { "label": "minimax (1)", "value": "--provider custom:minimax", "selected": false, "description": "Custom endpoint: MiniMax-M3" },
+            { "label": "nvidia (1)", "value": "--provider custom:nvidia", "selected": false, "description": "Custom endpoint: Nemotron" }
+          ]
+        },
+        {
+          "id": "model",
+          "label": "Select a model",
+          "type": "single_select",
+          "optionsBy": "provider",
+          "optionGroups": {
+            "--provider deepseek": [
+              { "label": "DeepSeek V4 Pro", "value": "deepseek-v4-pro", "selected": true, "description": "Top-tier reasoning" },
+              { "label": "DeepSeek V4 Flash", "value": "deepseek-v4-flash", "selected": false, "description": "Fast/cheap" },
+              { "label": "DeepSeek Chat", "value": "deepseek-chat", "selected": false, "description": "V3 chat" },
+              { "label": "DeepSeek Reasoner", "value": "deepseek-reasoner", "selected": false, "description": "R1 reasoning" }
+            ],
+            "--provider openrouter": [
+              { "label": "Claude Fable 5", "value": "anthropic/claude-fable-5" },
+              { "label": "Claude Opus 4.8", "value": "anthropic/claude-opus-4.8" },
+              { "label": "Claude Opus 4.8 Fast", "value": "anthropic/claude-opus-4.8-fast" },
+              { "label": "Claude Sonnet 5", "value": "anthropic/claude-sonnet-5" },
+              { "label": "Claude Haiku 4.5", "value": "anthropic/claude-haiku-4.5" },
+              { "label": "GPT-5.5", "value": "openai/gpt-5.5" },
+              { "label": "GPT-5.5 Pro", "value": "openai/gpt-5.5-pro" },
+              { "label": "GPT-5.4 Mini", "value": "openai/gpt-5.4-mini" },
+              { "label": "Gemini 3.1 Pro", "value": "google/gemini-3.1-pro-preview" },
+              { "label": "Gemini 3.5 Flash", "value": "google/gemini-3.5-flash" },
+              { "label": "Grok 4.3", "value": "x-ai/grok-4.3" },
+              { "label": "DeepSeek V4 Pro (OR)", "value": "deepseek/deepseek-v4-pro" },
+              { "label": "DeepSeek V4 Flash (OR)", "value": "deepseek/deepseek-v4-flash" },
+              { "label": "Qwen 3.7 Max", "value": "qwen/qwen3.7-max" },
+              { "label": "Qwen 3.7 Plus", "value": "qwen/qwen3.7-plus" },
+              { "label": "Qwen 3.6 35B", "value": "qwen/qwen3.6-35b-a3b" },
+              { "label": "Kimi K2.6", "value": "moonshotai/kimi-k2.6" },
+              { "label": "Kimi K2.7 Code", "value": "moonshotai/kimi-k2.7-code" },
+              { "label": "MiniMax M3", "value": "minimax/minimax-m3" },
+              { "label": "GLM 5.2", "value": "z-ai/glm-5.2" },
+              { "label": "GLM 5.1", "value": "z-ai/glm-5.1" },
+              { "label": "MiMo V2.5 Pro", "value": "xiaomi/mimo-v2.5-pro" },
+              { "label": "Hunyuan 3 Preview", "value": "tencent/hy3-preview" },
+              { "label": "Step 3.7 Flash", "value": "stepfun/step-3.7-flash" },
+              { "label": "Nemotron 3 Super 120B", "value": "nvidia/nemotron-3-super-120b-a12b" },
+              { "label": "Fugu Ultra", "value": "sakana/fugu-ultra" },
+              { "label": "Laguna M.1 (free)", "value": "poolside/laguna-m.1:free" },
+              { "label": "Nemotron Super 120B (free)", "value": "nvidia/nemotron-3-super-120b-a12b:free" },
+              { "label": "Nemotron Ultra 550B (free)", "value": "nvidia/nemotron-3-ultra-550b-a55b:free" }
+            ],
+            "--provider xai": [
+              { "label": "Grok Build 0.1", "value": "grok-build-0.1" },
+              { "label": "Grok Composer 2.5 Fast", "value": "grok-composer-2.5-fast" },
+              { "label": "Grok 4.20 (non-reasoning)", "value": "grok-4.20-0309-non-reasoning" },
+              { "label": "Grok 4.20 (reasoning)", "value": "grok-4.20-0309-reasoning" },
+              { "label": "Grok 4.20 (multi-agent)", "value": "grok-4.20-multi-agent-0309" },
+              { "label": "Grok 4.3", "value": "grok-4.3" },
+              { "label": "Grok Imagine (image)", "value": "grok-imagine-image" },
+              { "label": "Grok Imagine (quality)", "value": "grok-imagine-image-quality" },
+              { "label": "Grok Imagine (video)", "value": "grok-imagine-video" }
+            ],
+            "--provider custom:openrouter": [
+              { "label": "MiMo V2.5 Pro", "value": "xiaomi/mimo-v2.5-pro" },
+              { "label": "MiMo V2.5", "value": "xiaomi/mimo-v2.5" }
+            ],
+            "--provider custom:qwen3.5:9b": [
+              { "label": "Qwen 3.5 9B", "value": "qwen3.5:9b" }
+            ],
+            "--provider custom:minimax": [
+              { "label": "MiniMax M3", "value": "MiniMax-M3" }
+            ],
+            "--provider custom:nvidia": [
+              { "label": "Nemotron 3 Ultra 550B", "value": "nvidia/nemotron-3-ultra-550b-a55b" }
+            ]
+          }
+        }
+      ],
+      "examples": [
+        "/model deepseek-v4-pro",
+        "/model --provider deepseek deepseek-v4-pro",
+        "/model --provider openrouter anthropic/claude-sonnet-5",
+        "/model deepseek-v4-flash --provider deepseek"
+      ]
+    },
+    {
+      "name": "/reasoning",
+      "label": "Reasoning",
+      "description": "Manage reasoning effort and display",
+      "template": "/reasoning {level}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "level",
+          "label": "Reasoning level",
+          "type": "single_select",
+          "options": [
+            { "label": "None", "value": "none", "description": "No reasoning" },
+            { "label": "Minimal", "value": "minimal", "description": "Bare minimum" },
+            { "label": "Low", "value": "low" },
+            { "label": "Medium", "value": "medium", "description": "Default" },
+            { "label": "High", "value": "high" },
+            { "label": "X-High", "value": "xhigh", "description": "Maximum effort" },
+            { "label": "Show reasoning", "value": "show", "description": "Toggle display on" },
+            { "label": "Hide reasoning", "value": "hide", "description": "Toggle display off" }
+          ]
+        }
+      ],
+      "examples": [
+        "/reasoning high",
+        "/reasoning none",
+        "/reasoning show"
+      ]
+    },
+    {
+      "name": "/voice",
+      "label": "Voice Mode",
+      "description": "Toggle voice mode",
+      "template": "/voice {mode}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "mode",
+          "label": "Mode",
+          "type": "single_select",
+          "options": [
+            { "label": "On", "value": "on", "description": "Voice-to-voice" },
+            { "label": "Off", "value": "off", "description": "Text only" },
+            { "label": "TTS", "value": "tts", "description": "Always respond with voice" },
+            { "label": "Status", "value": "status", "description": "Show current mode" }
+          ]
+        }
+      ],
+      "examples": ["/voice on", "/voice off", "/voice tts"]
+    },
+    {
+      "name": "/fast",
+      "label": "Fast Mode",
+      "description": "Toggle fast mode — OpenAI Priority Processing / Anthropic Fast Mode (Normal/Fast)",
+      "template": "/fast {mode}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "mode",
+          "label": "Mode",
+          "type": "single_select",
+          "options": [
+            { "label": "Fast", "value": "fast", "description": "Priority processing" },
+            { "label": "Normal", "value": "normal", "description": "Default speed" },
+            { "label": "Status", "value": "status", "description": "Show current mode" }
+          ]
+        }
+      ],
+      "examples": ["/fast fast", "/fast normal"]
+    },
+    {
+      "name": "/personality",
+      "label": "Personality",
+      "description": "Set a predefined personality",
+      "template": "/personality {name}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "name",
+          "label": "Personality",
+          "type": "single_select",
+          "options": [
+            { "label": "Solara (default)", "value": "solara", "description": "Sci-fi Navigator A.I." }
+          ]
+        }
+      ],
+      "examples": ["/personality solara"]
+    },
+    {
+      "name": "/footer",
+      "label": "Footer",
+      "description": "Toggle gateway runtime-metadata footer on final replies",
+      "template": "/footer {setting}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "setting",
+          "label": "Setting",
+          "type": "single_select",
+          "options": [
+            { "label": "On", "value": "on" },
+            { "label": "Off", "value": "off" },
+            { "label": "Status", "value": "status", "description": "Show current setting" }
+          ]
+        }
+      ],
+      "examples": ["/footer on", "/footer off"]
+    },
+    {
+      "name": "/yolo",
+      "label": "YOLO Mode",
+      "description": "Toggle YOLO mode (skip all dangerous command approvals)",
+      "template": "/yolo",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/usage",
+      "label": "Token Usage",
+      "description": "Show token usage and rate limits for the current session",
+      "template": "/usage",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/version",
+      "label": "Version",
+      "description": "Show Hermes Agent version",
+      "template": "/version",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": ["/v"],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/profile",
+      "label": "Profile",
+      "description": "Show active profile name and home directory",
+      "template": "/profile",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/whoami",
+      "label": "Who Am I",
+      "description": "Show your slash command access (admin / user)",
+      "template": "/whoami",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/agents",
+      "label": "Active Agents",
+      "description": "Show active agents and running tasks",
+      "template": "/agents",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": ["/tasks"],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/restart",
+      "label": "Restart Gateway",
+      "description": "Gracefully restart the gateway after draining active runs",
+      "template": "/restart",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/update",
+      "label": "Update",
+      "description": "Update Hermes Agent to the latest version",
+      "template": "/update",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/commands",
+      "label": "Browse Commands",
+      "description": "Browse all commands and skills (paginated)",
+      "template": "/commands {page}",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "page",
+          "label": "Page",
+          "type": "text",
+          "required": false,
+          "placeholder": "e.g. 2"
+        }
+      ]
+    },
+    {
+      "name": "/insights",
+      "label": "Insights",
+      "description": "Show usage insights and analytics",
+      "template": "/insights {days}",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "days",
+          "label": "Days",
+          "type": "text",
+          "required": false,
+          "placeholder": "e.g. 7"
+        }
+      ]
+    },
+    {
+      "name": "/debug",
+      "label": "Debug Report",
+      "description": "Upload debug report (system info + logs) and get shareable links",
+      "template": "/debug {target}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "target",
+          "label": "Target",
+          "type": "single_select",
+          "required": false,
+          "options": [
+            { "label": "Nous (default)", "value": "nous", "description": "Upload to Nous Portal" },
+            { "label": "Local", "value": "local", "description": "Save locally" }
+          ]
+        }
+      ],
+      "examples": ["/debug", "/debug nous", "/debug local"]
+    },
+    {
+      "name": "/retry",
+      "label": "Retry",
+      "description": "Retry the last message (resend to agent)",
+      "template": "/retry",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/undo",
+      "label": "Undo",
+      "description": "Back up N user turns and re-prompt (default 1)",
+      "template": "/undo {n}",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "n",
+          "label": "Number of turns",
+          "type": "text",
+          "required": false,
+          "placeholder": "1"
+        }
+      ]
+    },
+    {
+      "name": "/title",
+      "label": "Set Title",
+      "description": "Set a title for the current session",
+      "template": "/title {name}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "name",
+          "label": "Title",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. Auth refactor debugging"
+        }
+      ]
+    },
+    {
+      "name": "/background",
+      "label": "Background Task",
+      "description": "Run a prompt in the background",
+      "template": "/background {prompt}",
+      "sendMode": "fill_composer",
+      "voiceSafe": false,
+      "aliases": ["/bg", "/btw"],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "prompt",
+          "label": "Prompt",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. Run the test suite"
+        }
+      ]
+    },
+    {
+      "name": "/queue",
+      "label": "Queue",
+      "description": "Queue a prompt for the next turn (doesn't interrupt)",
+      "template": "/queue {prompt}",
+      "sendMode": "fill_composer",
+      "voiceSafe": false,
+      "aliases": ["/q"],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "prompt",
+          "label": "Prompt",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. Also check the logs"
+        }
+      ]
+    },
+    {
+      "name": "/steer",
+      "label": "Steer",
+      "description": "Inject a message after the next tool call without interrupting",
+      "template": "/steer {prompt}",
+      "sendMode": "fill_composer",
+      "voiceSafe": false,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "prompt",
+          "label": "Prompt",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. Use a different approach"
+        }
+      ]
+    },
+    {
+      "name": "/resume",
+      "label": "Resume Session",
+      "description": "Resume a previously-named session",
+      "template": "/resume {name}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "name",
+          "label": "Session name",
+          "type": "text",
+          "required": false,
+          "placeholder": "e.g. auth-refactor"
+        }
+      ]
+    },
+    {
+      "name": "/sessions",
+      "label": "Sessions",
+      "description": "Browse and resume previous sessions",
+      "template": "/sessions",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/branch",
+      "label": "Branch Session",
+      "description": "Branch the current session (explore a different path)",
+      "template": "/branch {name}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": ["/fork"],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "name",
+          "label": "Branch name (optional)",
+          "type": "text",
+          "required": false,
+          "placeholder": "e.g. alternative-approach"
+        }
+      ]
+    },
+    {
+      "name": "/compress",
+      "label": "Compress",
+      "description": "Compress conversation context",
+      "template": "/compress {directive}",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "directive",
+          "label": "Directive",
+          "type": "text",
+          "required": false,
+          "placeholder": "here 5  or  focus topic"
+        }
+      ]
+    },
+    {
+      "name": "/rollback",
+      "label": "Rollback",
+      "description": "List or restore filesystem checkpoints",
+      "template": "/rollback {number}",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "number",
+          "label": "Checkpoint number",
+          "type": "text",
+          "required": false,
+          "placeholder": "e.g. 3"
+        }
+      ]
+    },
+    {
+      "name": "/approve",
+      "label": "Approve",
+      "description": "Approve a pending dangerous command",
+      "template": "/approve {scope}",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "scope",
+          "label": "Scope",
+          "type": "single_select",
+          "required": false,
+          "options": [
+            { "label": "This command only", "value": "", "description": "Default" },
+            { "label": "Always for this session", "value": "always" }
+          ]
+        }
+      ],
+      "examples": ["/approve", "/approve always"]
+    },
+    {
+      "name": "/deny",
+      "label": "Deny",
+      "description": "Deny a pending dangerous command",
+      "template": "/deny",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/goal",
+      "label": "Goal",
+      "description": "Set a standing goal Hermes works on across turns until achieved",
+      "template": "/goal {action}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "single_select",
+          "options": [
+            { "label": "Set goal...", "value": "", "description": "Type your goal text after /goal" },
+            { "label": "Show status", "value": "status" },
+            { "label": "Pause", "value": "pause" },
+            { "label": "Resume", "value": "resume" },
+            { "label": "Clear", "value": "clear" }
+          ]
+        }
+      ],
+      "examples": [
+        "/goal Fix the IT band rehab tracking",
+        "/goal status",
+        "/goal pause"
+      ]
+    },
+    {
+      "name": "/subgoal",
+      "label": "Subgoal",
+      "description": "Add or manage extra criteria on the active goal",
+      "template": "/subgoal {action}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "text",
+          "required": false,
+          "placeholder": "text  or  remove N  or  clear"
+        }
+      ]
+    },
+    {
+      "name": "/topic",
+      "label": "DM Topics",
+      "description": "Enable or inspect Telegram DM topic sessions",
+      "template": "/topic {action}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "single_select",
+          "required": false,
+          "options": [
+            { "label": "Off", "value": "off", "description": "Disable DM topics" },
+            { "label": "Help", "value": "help", "description": "Show help" }
+          ]
+        }
+      ],
+      "examples": ["/topic off", "/topic help", "/topic <session-id>"]
+    },
+    {
+      "name": "/platform",
+      "label": "Platform",
+      "description": "Pause, resume, or list a failing gateway platform",
+      "template": "/platform {action} {name}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "single_select",
+          "options": [
+            { "label": "Pause", "value": "pause" },
+            { "label": "Resume", "value": "resume" },
+            { "label": "List", "value": "list" }
+          ]
+        },
+        {
+          "id": "name",
+          "label": "Platform name (for pause/resume)",
+          "type": "text",
+          "required": false
+        }
+      ],
+      "examples": ["/platform list", "/platform pause discord", "/platform resume telegram"]
+    },
+    {
+      "name": "/memory",
+      "label": "Memory",
+      "description": "Review pending memory writes / toggle the approval gate",
+      "template": "/memory {action}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "single_select",
+          "options": [
+            { "label": "Pending", "value": "pending", "description": "Review pending writes" },
+            { "label": "Approve", "value": "approve", "description": "Approve a write" },
+            { "label": "Reject", "value": "reject", "description": "Reject a write" },
+            { "label": "Approval gate", "value": "approval", "description": "Toggle on/off" }
+          ]
+        }
+      ],
+      "examples": ["/memory pending", "/memory approve <id>", "/memory approval on"]
+    },
+    {
+      "name": "/curator",
+      "label": "Curator",
+      "description": "Background skill maintenance (status, run, pin, archive, list-archived)",
+      "template": "/curator {action}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "single_select",
+          "options": [
+            { "label": "Status", "value": "status" },
+            { "label": "Run", "value": "run" },
+            { "label": "Pause", "value": "pause" },
+            { "label": "Resume", "value": "resume" },
+            { "label": "Pin", "value": "pin" },
+            { "label": "Unpin", "value": "unpin" },
+            { "label": "Restore", "value": "restore" },
+            { "label": "List archived", "value": "list-archived" }
+          ]
+        }
+      ],
+      "examples": ["/curator status", "/curator run", "/curator pin <skill-name>"]
+    },
+    {
+      "name": "/kanban",
+      "label": "Kanban",
+      "description": "Multi-profile collaboration board (tasks, links, comments)",
+      "template": "/kanban {action}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "single_select",
+          "options": [
+            { "label": "Create task", "value": "create" },
+            { "label": "List tasks", "value": "list" },
+            { "label": "Show task", "value": "show" },
+            { "label": "Assign", "value": "assign" },
+            { "label": "Complete", "value": "complete" },
+            { "label": "Block", "value": "block" },
+            { "label": "Unblock", "value": "unblock" },
+            { "label": "Archive", "value": "archive" },
+            { "label": "Comment", "value": "comment" },
+            { "label": "Link", "value": "link" },
+            { "label": "Tail (watch)", "value": "tail" }
+          ]
+        }
+      ],
+      "examples": ["/kanban list", "/kanban create Fix the login bug", "/kanban show <task-id>"]
+    },
+    {
+      "name": "/reload_skills",
+      "label": "Reload Skills",
+      "description": "Re-scan ~/.hermes/skills/ for newly installed or removed skills",
+      "template": "/reload_skills",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": ["/reload-skills"],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/reload_mcp",
+      "label": "Reload MCP",
+      "description": "Reload MCP servers from config",
+      "template": "/reload_mcp",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": ["/reload-mcp"],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/suggestions",
+      "label": "Suggestions",
+      "description": "Review suggested automations (accept/dismiss)",
+      "template": "/suggestions {action}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": ["/suggest"],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "action",
+          "label": "Action",
+          "type": "single_select",
+          "options": [
+            { "label": "Accept", "value": "accept" },
+            { "label": "Dismiss", "value": "dismiss" },
+            { "label": "Catalog", "value": "catalog" },
+            { "label": "Clear", "value": "clear" }
+          ]
+        }
+      ],
+      "examples": ["/suggestions accept", "/suggestions dismiss 3"]
+    },
+    {
+      "name": "/blueprint",
+      "label": "Blueprint",
+      "description": "Set up an automation from a blueprint template",
+      "template": "/blueprint {name} {params}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": ["/bp"],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "name",
+          "label": "Blueprint name",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. daily-briefing"
+        },
+        {
+          "id": "params",
+          "label": "Parameters (slot=value)",
+          "type": "text",
+          "required": false,
+          "placeholder": "e.g. time=9am topic=news"
+        }
+      ]
+    },
+    {
+      "name": "/learn",
+      "label": "Learn",
+      "description": "Learn a reusable skill from anything you describe (dirs, URLs, this chat, notes)",
+      "template": "/learn {source}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "source",
+          "label": "What to learn from",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. this session  or  ~/projects/myapp"
+        }
+      ]
+    },
+    {
+      "name": "/moa",
+      "label": "Mixture of Agents",
+      "description": "Run one prompt through the default Mixture of Agents preset, then restore your model",
+      "template": "/moa {prompt}",
+      "sendMode": "fill_composer",
+      "voiceSafe": false,
+      "aliases": [],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "prompt",
+          "label": "Prompt",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. Review this approach"
+        }
+      ]
+    },
+    {
+      "name": "/sethome",
+      "label": "Set Home",
+      "description": "Set this chat as the home channel",
+      "template": "/sethome",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": ["/set-home"],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/credits",
+      "label": "Credits",
+      "description": "Show Nous credit balance and top up",
+      "template": "/credits",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/bundles",
+      "label": "Skill Bundles",
+      "description": "List skill bundles (aliases /<name> for multiple skills)",
+      "template": "/bundles",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    },
+    {
+      "name": "/codex_runtime",
+      "label": "Codex Runtime",
+      "description": "Toggle codex app-server runtime for OpenAI/Codex models",
+      "template": "/codex_runtime {mode}",
+      "sendMode": "fill_composer",
+      "voiceSafe": true,
+      "aliases": ["/codex-runtime"],
+      "allowTypedArgs": true,
+      "steps": [
+        {
+          "id": "mode",
+          "label": "Mode",
+          "type": "single_select",
+          "required": false,
+          "options": [
+            { "label": "Auto", "value": "auto" },
+            { "label": "Codex App Server", "value": "codex_app_server" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "/start",
+      "label": "Start",
+      "description": "Acknowledge platform start pings without a reply",
+      "template": "/start",
+      "sendMode": "send_immediately",
+      "voiceSafe": true,
+      "aliases": [],
+      "allowTypedArgs": false
+    }
+  ]
+}

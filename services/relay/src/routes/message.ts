@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { AgentConnector } from "../connectors/AgentConnector.js";
+import type { RelayInbox } from "../db/inbox.js";
 import { buildCaptureOnlyAction } from "../safety/modeRules.js";
 import {
   AgentMessageRequestSchema,
@@ -11,7 +12,11 @@ import { createRequestId } from "../utils/requestId.js";
 
 type ConnectorRegistry = Partial<Record<AgentName, AgentConnector>>;
 
-export function registerMessageRoute(server: FastifyInstance, connectors: ConnectorRegistry): void {
+export function registerMessageRoute(
+  server: FastifyInstance,
+  connectors: ConnectorRegistry,
+  inbox?: RelayInbox
+): void {
   server.post("/api/message", async (request, reply) => {
     const requestId = createRequestId();
     const parsed = AgentMessageRequestSchema.safeParse(request.body);
@@ -28,7 +33,9 @@ export function registerMessageRoute(server: FastifyInstance, connectors: Connec
     }
 
     if (parsed.data.mode === "capture_only") {
-      return reply.send(buildCaptureOnlyResponse(parsed.data, requestId));
+      const response = buildCaptureOnlyResponse(parsed.data, requestId);
+      recordExchange(inbox, parsed.data, response, requestId);
+      return reply.send(response);
     }
 
     const connector = connectors[parsed.data.agent];
@@ -50,6 +57,7 @@ export function registerMessageRoute(server: FastifyInstance, connectors: Connec
       requestId
     });
 
+    recordExchange(inbox, parsed.data, response, requestId);
     return reply.send(response);
   });
 }
@@ -73,3 +81,36 @@ function buildCaptureOnlyResponse(
   };
 }
 
+function recordExchange(
+  inbox: RelayInbox | undefined,
+  request: AgentMessageRequest,
+  response: AgentResponse,
+  requestId: string
+): void {
+  if (!inbox || !request.conversationId) {
+    return;
+  }
+
+  const timestamp = request.clientTimestamp ?? new Date().toISOString();
+  inbox.createMessage({
+    conversationId: request.conversationId,
+    direction: "incoming",
+    content: request.message,
+    source: "user",
+    status: "delivered",
+    timestamp,
+    metadata: { requestId }
+  });
+  inbox.createMessage({
+    conversationId: request.conversationId,
+    direction: "outgoing",
+    content: response.reply,
+    source: response.connector,
+    status: "delivered",
+    metadata: {
+      requestId,
+      warnings: response.warnings,
+      queuedActions: response.queuedActions
+    }
+  });
+}

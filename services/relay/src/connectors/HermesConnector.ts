@@ -21,6 +21,9 @@ type FetchLike = (
 ) => Promise<{
   ok: boolean;
   status: number;
+  headers?: {
+    get(name: string): string | null;
+  };
   text(): Promise<string>;
 }>;
 
@@ -38,6 +41,7 @@ const DEFAULT_USER = "agentvoice-mobile";
 
 export class HermesConnector implements AgentConnector {
   readonly name = "hermes" as const;
+  private readonly sessionIdsByConversation = new Map<string, string>();
 
   constructor(
     private readonly config: HermesConfig = readHermesConfig(),
@@ -96,6 +100,14 @@ export class HermesConnector implements AgentConnector {
       if (this.config.token) {
         headers.Authorization = `Bearer ${this.config.token}`;
       }
+      const conversationId = input.conversationId?.trim();
+      if (conversationId) {
+        headers["X-Hermes-Session-Key"] = `agentvoice:${conversationId}`;
+        const sessionId = this.sessionIdsByConversation.get(conversationId);
+        if (sessionId) {
+          headers["X-Hermes-Session-Id"] = sessionId;
+        }
+      }
 
       const response = await this.fetchImpl(completionsUrl, {
         method: "POST",
@@ -116,6 +128,10 @@ export class HermesConnector implements AgentConnector {
         }),
         signal: controller.signal
       });
+      const sessionId = response.headers?.get("x-hermes-session-id")?.trim();
+      if (conversationId && sessionId) {
+        this.sessionIdsByConversation.set(conversationId, sessionId);
+      }
       const body = await response.text();
 
       if (!response.ok) {

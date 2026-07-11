@@ -7,6 +7,7 @@ import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.model.QueuedAction
 import com.agentvoice.app.model.QueuedActionStatus
 import com.agentvoice.app.model.QueuedActionType
+import com.agentvoice.app.model.RelayInboxMessage
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -26,6 +27,8 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.net.URI
 import java.net.SocketTimeoutException
+import java.net.URLEncoder
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 class RelayClient(
@@ -44,7 +47,8 @@ class RelayClient(
         backendUrl: String,
         agent: ConnectorType,
         message: String,
-        mode: AgentMode
+        mode: AgentMode,
+        conversationId: String? = null
     ): Result<AgentResponse> {
         return try {
             Result.success(
@@ -54,6 +58,12 @@ class RelayClient(
                         .put("agent", agent.value)
                         .put("message", message)
                         .put("mode", mode.wireValue)
+                        .apply {
+                            val cleanedConversationId = conversationId?.trim()
+                            if (!cleanedConversationId.isNullOrBlank()) {
+                                put("conversationId", cleanedConversationId)
+                            }
+                        }
                         .toString()
 
                     val response = client.post("$baseUrl/api/message") {
@@ -99,6 +109,92 @@ class RelayClient(
             )
         } catch (error: TimeoutCancellationException) {
             Result.failure(RelayClientException("Timed out checking AgentVoice relay."))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(toRelayError(error))
+        }
+    }
+
+    suspend fun fetchCommandCatalog(backendUrl: String): Result<String> {
+        return try {
+            Result.success(
+                withTimeout(COMMAND_CATALOG_TIMEOUT_MS) {
+                    val baseUrl = normalizeBackendUrl(backendUrl)
+                    val response = client.get("$baseUrl/api/commands")
+                    val responseBody = response.body<String>()
+
+                    if (!response.status.isSuccess()) {
+                        throw RelayClientException(
+                            "Command catalog returned HTTP ${response.status.value}: ${responseBody.take(240)}"
+                        )
+                    }
+
+                    responseBody
+                }
+            )
+        } catch (error: TimeoutCancellationException) {
+            Result.failure(RelayClientException("Timed out loading the Hermes command catalog."))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(toRelayError(error))
+        }
+    }
+
+    suspend fun fetchPendingMessages(
+        backendUrl: String,
+        conversationId: String
+    ): Result<List<RelayInboxMessage>> {
+        return try {
+            Result.success(
+                withTimeout(INBOX_TIMEOUT_MS) {
+                    val baseUrl = normalizeBackendUrl(backendUrl)
+                    val encodedConversationId = encodeQuery(conversationId)
+                    val response = client.get(
+                        "$baseUrl/api/messages?conversationId=$encodedConversationId&limit=100"
+                    )
+                    val responseBody = response.body<String>()
+
+                    if (!response.status.isSuccess()) {
+                        throw RelayClientException(
+                            "Inbox returned HTTP ${response.status.value}: ${responseBody.take(240)}"
+                        )
+                    }
+
+                    parseInboxResponse(responseBody)
+                }
+            )
+        } catch (error: TimeoutCancellationException) {
+            Result.failure(RelayClientException("Timed out checking AgentVoice inbox."))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(toRelayError(error))
+        }
+    }
+
+    suspend fun acknowledgeMessage(
+        backendUrl: String,
+        messageId: String
+    ): Result<Unit> {
+        return try {
+            Result.success(
+                withTimeout(INBOX_TIMEOUT_MS) {
+                    val baseUrl = normalizeBackendUrl(backendUrl)
+                    val encodedMessageId = encodePath(messageId)
+                    val response = client.post("$baseUrl/api/messages/$encodedMessageId/ack")
+                    val responseBody = response.body<String>()
+
+                    if (!response.status.isSuccess()) {
+                        throw RelayClientException(
+                            "Inbox ack returned HTTP ${response.status.value}: ${responseBody.take(240)}"
+                        )
+                    }
+                }
+            )
+        } catch (error: TimeoutCancellationException) {
+            Result.failure(RelayClientException("Timed out acknowledging AgentVoice inbox message."))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -204,6 +300,29 @@ class RelayClient(
         }
     }
 
+    private fun parseInboxResponse(body: String): List<RelayInboxMessage> {
+        try {
+            val json = JSONObject(body)
+            val conversationId = json.getString("conversationId")
+            val messages = json.optJSONArray("messages") ?: json.optJSONArray("pending")
+            return (0 until (messages?.length() ?: 0)).map { index ->
+                val item = messages!!.getJSONObject(index)
+                RelayInboxMessage(
+                    id = item.getString("id"),
+                    conversationId = conversationId,
+                    direction = item.optString("direction", "outgoing"),
+                    content = item.getString("content"),
+                    source = item.optString("source", "hermes"),
+                    status = item.optString("status", "pending"),
+                    timestampMillis = parseIsoTimestampMillis(item.getString("timestamp")),
+                    metadataSummary = metadataSummary(item.optJSONObject("metadata"))
+                )
+            }
+        } catch (error: JSONException) {
+            throw RelayClientException("Inbox response was not in the expected shape.")
+        }
+    }
+
     private fun JSONArray?.toQueuedActions(): List<QueuedAction> {
         if (this == null) {
             return emptyList()
@@ -241,8 +360,36 @@ class RelayClient(
             else -> RelayClientException(error.message ?: "Unable to reach AgentVoice relay.")
         }
 
+    private fun parseIsoTimestampMillis(value: String): Long =
+        runCatching { Instant.parse(value).toEpochMilli() }
+            .getOrDefault(System.currentTimeMillis())
+
+    private fun metadataSummary(json: JSONObject?): String {
+        if (json == null || json.length() == 0) {
+            return ""
+        }
+
+        val priorityKeys = listOf("cronJobName", "cronJobId", "scheduledAt", "requestId")
+        val parts = priorityKeys.mapNotNull { key ->
+            json.optString(key).takeIf { it.isNotBlank() }?.let { value -> "$key: $value" }
+        }
+        return parts.ifEmpty {
+            json.keys().asSequence().take(4).map { key ->
+                "$key: ${json.optString(key)}"
+            }.toList()
+        }.joinToString(separator = "\n")
+    }
+
+    private fun encodeQuery(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8.name())
+
+    private fun encodePath(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
+
     companion object {
         private const val SEND_TIMEOUT_MS = 45_000L
+        private const val COMMAND_CATALOG_TIMEOUT_MS = 8_000L
+        private const val INBOX_TIMEOUT_MS = 8_000L
         private const val TRANSCRIBE_TIMEOUT_MS = 90_000L
     }
 }

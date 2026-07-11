@@ -30,6 +30,9 @@ yarn-error.log*
 pnpm-debug.log*
 dist/
 coverage/
+services/relay/data/
+*.sqlite
+*.sqlite-*
 
 # IDE and OS files
 .idea/
@@ -42,4 +45,3 @@ Thumbs.db
 tmp/
 temp/
 *.log
-
