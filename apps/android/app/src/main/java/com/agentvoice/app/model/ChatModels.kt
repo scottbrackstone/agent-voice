@@ -7,7 +7,9 @@ data class ChatThread(
     val connector: ConnectorType,
     val mode: AgentMode,
     val createdAtMillis: Long,
-    val updatedAtMillis: Long
+    val updatedAtMillis: Long,
+    val backgroundId: String = ChatBackground.DEFAULT_ID,
+    val avatarModelId: String = AvatarModels.SOLARA_STATIC
 )
 
 data class ChatMessage(

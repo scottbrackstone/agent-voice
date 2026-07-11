@@ -1,0 +1,23 @@
+name: agentvoice-platform
+label: AgentVoice
+kind: platform
+version: 1.0.0
+description: >
+  Outbound AgentVoice platform adapter for Hermes Agent. Delivers cron and
+  proactive messages to the AgentVoice relay webhook without changing
+  Telegram, CLI, or other Hermes clients.
+author: AgentVoice
+requires_env:
+  - name: AGENTVOICE_RELAY_URL
+    description: "AgentVoice relay base URL, normally http://127.0.0.1:3001"
+    prompt: "AgentVoice relay URL"
+    password: false
+  - name: AGENTVOICE_WEBHOOK_TOKEN
+    description: "Shared secret accepted by the AgentVoice relay webhook"
+    prompt: "AgentVoice webhook token"
+    password: true
+optional_env:
+  - name: AGENTVOICE_HOME_CHANNEL
+    description: "Default Hermes session ID for deliver=agentvoice"
+    prompt: "Default AgentVoice session ID"
+    password: false

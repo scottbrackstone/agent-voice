@@ -14,7 +14,7 @@ HERMES_BASE_URL=http://127.0.0.1:18888
 HERMES_TOKEN=
 HERMES_MODEL=hermes
 HERMES_USER=agentvoice-mobile
-HERMES_TIMEOUT_MS=30000
+HERMES_TIMEOUT_MS=120000
 ```
 
 The first implementation assumes Hermes exposes an OpenAI-compatible endpoint:

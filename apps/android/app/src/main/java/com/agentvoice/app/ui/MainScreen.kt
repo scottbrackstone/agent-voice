@@ -12,6 +12,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -80,10 +82,14 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipboardManager
@@ -98,12 +104,15 @@ import com.agentvoice.app.R
 import com.agentvoice.app.commands.CommandOption
 import com.agentvoice.app.commands.HermesCommand
 import com.agentvoice.app.model.AgentMode
+import com.agentvoice.app.model.AgentPresentation
 import com.agentvoice.app.model.ChatMessage
 import com.agentvoice.app.model.ChatMessageRole
+import com.agentvoice.app.model.ChatBackground
 import com.agentvoice.app.model.ChatThread
 import com.agentvoice.app.model.ConversationRecord
 import com.agentvoice.app.model.QueuedAction
 import com.agentvoice.app.viewmodel.MainUiState
+import com.agentvoice.app.ui.presentation.SolaraStaticRenderer
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
@@ -112,6 +121,7 @@ import kotlinx.coroutines.launch
 fun MainScreen(
     uiState: MainUiState,
     onModeSelected: (AgentMode) -> Unit,
+    onBackgroundSelected: (String) -> Unit,
     onTalkClick: () -> Unit,
     onTypedMessageChange: (String) -> Unit,
     onSendTypedMessage: () -> Unit,
@@ -165,6 +175,7 @@ fun MainScreen(
         ChatScreen(
             uiState = uiState,
             onModeSelected = onModeSelected,
+            onBackgroundSelected = onBackgroundSelected,
             onTalkClick = onTalkClick,
             onTypedMessageChange = onTypedMessageChange,
             onSendTypedMessage = onSendTypedMessage,
@@ -368,6 +379,7 @@ fun ThreadListScreen(
 fun ChatScreen(
     uiState: MainUiState,
     onModeSelected: (AgentMode) -> Unit,
+    onBackgroundSelected: (String) -> Unit,
     onTalkClick: () -> Unit,
     onTypedMessageChange: (String) -> Unit,
     onSendTypedMessage: () -> Unit,
@@ -383,6 +395,7 @@ fun ChatScreen(
     modifier: Modifier = Modifier
 ) {
     val selectedThread = uiState.selectedThread
+    var showBackgroundPicker by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -410,6 +423,12 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { showBackgroundPicker = true },
+                        enabled = selectedThread != null
+                    ) {
+                        Icon(Icons.Default.Palette, contentDescription = "Chat background")
+                    }
                     IconButton(onClick = onRenameThreadClick, enabled = selectedThread != null) {
                         Icon(Icons.Default.Edit, contentDescription = "Rename thread")
                     }
@@ -433,36 +452,191 @@ fun ChatScreen(
         },
         modifier = modifier.fillMaxSize()
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
         ) {
-            ChatStatusHeader(
-                uiState = uiState,
-                onModeSelected = onModeSelected,
-                onTtsToggle = onTtsToggle,
-                onSpeakAgainClick = onSpeakAgainClick
-            )
+            ChatBackdrop(selectedThread?.backgroundId ?: ChatBackground.DEFAULT_ID)
+            Column(modifier = Modifier.fillMaxSize()) {
+                ChatStatusHeader(
+                    uiState = uiState,
+                    onModeSelected = onModeSelected,
+                    onTtsToggle = onTtsToggle,
+                    onSpeakAgainClick = onSpeakAgainClick
+                )
 
-            if (uiState.isLoading || uiState.isListening || uiState.isTranscribingVoiceClip) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
+                if (uiState.isLoading || uiState.isListening || uiState.isTranscribingVoiceClip) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
 
-            uiState.errorMessage?.let { error ->
-                ErrorStrip(
-                    body = error,
-                    canRetry = uiState.canRetry,
-                    onRetry = onRetryClick
+                uiState.errorMessage?.let { error ->
+                    ErrorStrip(
+                        body = error,
+                        canRetry = uiState.canRetry,
+                        onRetry = onRetryClick
+                    )
+                }
+
+                MessageList(
+                    messages = uiState.activeThreadMessages,
+                    isBusy = uiState.isLoading || uiState.isListening || uiState.isTranscribingVoiceClip,
+                    onMessageLongPress = onMessageLongPress
                 )
             }
+        }
+    }
 
-            MessageList(
-                messages = uiState.activeThreadMessages,
-                isBusy = uiState.isLoading || uiState.isListening || uiState.isTranscribingVoiceClip,
-                onMessageLongPress = onMessageLongPress
+    if (showBackgroundPicker) {
+        BackgroundPickerSheet(
+            selectedId = selectedThread?.backgroundId ?: ChatBackground.DEFAULT_ID,
+            onSelected = { background ->
+                onBackgroundSelected(background.id)
+                showBackgroundPicker = false
+            },
+            onDismiss = { showBackgroundPicker = false }
+        )
+    }
+}
+
+private data class BackdropPalette(
+    val base: Color,
+    val secondary: Color,
+    val accent: Color,
+    val line: Color
+)
+
+@Composable
+private fun ChatBackdrop(backgroundId: String) {
+    val palette = when (ChatBackground.fromId(backgroundId)) {
+        ChatBackground.SakuraSignal -> BackdropPalette(
+            base = Color(0xFFFFE9F2),
+            secondary = Color(0xFFD9FFF7),
+            accent = Color(0xFFFF6FA9),
+            line = Color(0xFF28A9A1)
+        )
+        ChatBackground.NeonBloom -> BackdropPalette(
+            base = Color(0xFFD8FFF6),
+            secondary = Color(0xFFFFE16B),
+            accent = Color(0xFFFF4F9A),
+            line = Color(0xFF087F8C)
+        )
+        ChatBackground.ElectricDawn -> BackdropPalette(
+            base = Color(0xFFFFF1A8),
+            secondary = Color(0xFFB8F5E5),
+            accent = Color(0xFFFF5D73),
+            line = Color(0xFF247BA0)
+        )
+        ChatBackground.MidnightArcade -> BackdropPalette(
+            base = Color(0xFF171331),
+            secondary = Color(0xFF2B1F55),
+            accent = Color(0xFFFF5DA2),
+            line = Color(0xFF4CE7D8)
+        )
+    }
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        drawRect(palette.base)
+        drawRect(
+            color = palette.secondary.copy(alpha = 0.32f),
+            topLeft = Offset(0f, size.height * 0.48f),
+            size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.52f)
+        )
+
+        val grid = 44.dp.toPx()
+        var x = -size.height
+        while (x < size.width) {
+            drawLine(
+                color = palette.line.copy(alpha = 0.13f),
+                start = Offset(x, 0f),
+                end = Offset(x + size.height, size.height),
+                strokeWidth = 1.dp.toPx()
             )
+            x += grid
+        }
+
+        var y = grid
+        while (y < size.height) {
+            drawLine(
+                color = palette.accent.copy(alpha = 0.10f),
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 1.dp.toPx()
+            )
+            y += grid * 1.7f
+        }
+
+        repeat(7) { index ->
+            val left = (index * 83.dp.toPx()) % size.width
+            val top = (index * 137.dp.toPx()) % size.height
+            val tile = 9.dp.toPx()
+            drawRect(
+                color = palette.accent.copy(alpha = 0.20f),
+                topLeft = Offset(left, top),
+                size = androidx.compose.ui.geometry.Size(tile, tile),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BackgroundPickerSheet(
+    selectedId: String,
+    onSelected: (ChatBackground) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "Chat atmosphere",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            ChatBackground.entries.forEach { background ->
+                val swatch = when (background) {
+                    ChatBackground.SakuraSignal -> Color(0xFFFF79B0)
+                    ChatBackground.NeonBloom -> Color(0xFF3FD9C7)
+                    ChatBackground.ElectricDawn -> Color(0xFFFFD166)
+                    ChatBackground.MidnightArcade -> Color(0xFF45357A)
+                }
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelected(background) },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (background.id == selectedId) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(swatch)
+                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
+                        )
+                        Text(background.label, modifier = Modifier.weight(1f))
+                        if (background.id == selectedId) {
+                            Icon(Icons.Default.Check, contentDescription = "Selected")
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
         }
     }
 }
@@ -603,52 +777,77 @@ private fun ChatStatusHeader(
     onTtsToggle: (Boolean) -> Unit,
     onSpeakAgainClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        tonalElevation = 2.dp
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            CompanionAvatar(
-                isActive = uiState.isLoading || uiState.isListening || uiState.isSpeaking,
-                size = 54.dp
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    uiState.connectionStatus,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    uiState.selectedAgent.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            IconButton(
-                onClick = onSpeakAgainClick,
-                enabled = uiState.canSpeakAgain
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(13.dp)
             ) {
-                Icon(Icons.Default.VolumeUp, contentDescription = "Speak again")
+                CompanionAvatar(
+                    isActive = uiState.isLoading || uiState.isListening || uiState.isSpeaking,
+                    size = 72.dp,
+                    presentation = uiState.presentation
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        "Solara",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        uiState.connectionStatus,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        companionStatus(uiState),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = onSpeakAgainClick,
+                        enabled = uiState.canSpeakAgain
+                    ) {
+                        Icon(Icons.Default.VolumeUp, contentDescription = "Speak again")
+                    }
+                    Switch(checked = uiState.ttsEnabled, onCheckedChange = onTtsToggle)
+                }
             }
-            Switch(checked = uiState.ttsEnabled, onCheckedChange = onTtsToggle)
-        }
 
-        ModeSelector(selectedMode = uiState.mode, onModeSelected = onModeSelected)
+            ModeSelector(selectedMode = uiState.mode, onModeSelected = onModeSelected)
 
-        if (uiState.mode.showsCaptureNotice) {
-            SafetyNotice()
-        }
+            uiState.toolProgressMessage?.let { progress ->
+                Text(
+                    progress,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
 
-        if (uiState.queuedActions.isNotEmpty()) {
-            QueuedActionPanel(uiState.queuedActions)
+            if (uiState.mode.showsCaptureNotice) {
+                SafetyNotice()
+            }
+
+            if (uiState.queuedActions.isNotEmpty()) {
+                QueuedActionPanel(uiState.queuedActions)
+            }
         }
     }
 }
@@ -679,6 +878,8 @@ private fun MessageList(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val latestMessageId = messages.lastOrNull()?.id
+    var previousMessageCount by remember { mutableIntStateOf(0) }
+    var unreadBelow by remember { mutableIntStateOf(0) }
     val showScrollToBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
@@ -690,7 +891,18 @@ private fun MessageList(
 
     LaunchedEffect(latestMessageId) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.lastIndex)
+            val previousCount = previousMessageCount
+            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val wasNearBottom = previousCount == 0 || lastVisibleIndex >= previousCount - 2
+            val sentByUser = messages.lastOrNull()?.role == ChatMessageRole.User
+            val addedCount = (messages.size - previousCount).coerceAtLeast(0)
+            if (wasNearBottom || sentByUser) {
+                listState.animateScrollToItem(messages.lastIndex)
+                unreadBelow = 0
+            } else {
+                unreadBelow += addedCount
+            }
+            previousMessageCount = messages.size
         }
     }
 
@@ -733,19 +945,28 @@ private fun MessageList(
                 .align(Alignment.BottomEnd)
                 .padding(18.dp)
         ) {
-            Button(
-                onClick = {
-                    coroutineScope.launch {
-                        listState.animateScrollToItem(messages.size)
-                    }
-                },
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                tonalElevation = 4.dp
             ) {
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = "Scroll to latest"
-                )
+                IconButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            listState.animateScrollToItem(messages.size)
+                            unreadBelow = 0
+                        }
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (unreadBelow > 0) {
+                            "$unreadBelow new messages. Scroll to latest"
+                        } else {
+                            "Scroll to latest"
+                        }
+                    )
+                }
             }
         }
     }
@@ -888,7 +1109,7 @@ private fun ComposerBar(
                     value = uiState.typedMessage,
                     onValueChange = onTypedMessageChange,
                     enabled = !uiState.isLoading && !uiState.isListening,
-                    placeholder = { Text("Message Hermes") },
+                    placeholder = { Text("Message ${uiState.selectedAgent.label}") },
                     minLines = 1,
                     maxLines = 4,
                     modifier = Modifier.weight(1f),
@@ -952,37 +1173,15 @@ private fun MicPulseButton(
 @Composable
 private fun CompanionAvatar(
     isActive: Boolean,
-    size: androidx.compose.ui.unit.Dp
+    size: androidx.compose.ui.unit.Dp,
+    presentation: AgentPresentation = AgentPresentation()
 ) {
-    val transition = rememberInfiniteTransition(label = "avatarBreath")
-    val scale by transition.animateFloat(
-        initialValue = if (isActive) 0.97f else 1f,
-        targetValue = if (isActive) 1.04f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "avatarBreathScale"
-    )
-
-    Box(
+    SolaraStaticRenderer.Render(
+        presentation = presentation,
+        active = isActive,
+        size = size,
         modifier = Modifier
-            .size(size)
-            .graphicsLayer(scaleX = scale, scaleY = scale)
-            .clip(CircleShape)
-            .background(SoftTeal.copy(alpha = 0.26f))
-            .border(2.dp, CompanionPink.copy(alpha = 0.72f), CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
-        Image(
-            painter = painterResource(R.drawable.agent_companion),
-            contentDescription = "AgentVoice companion",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(CircleShape)
-        )
-    }
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -1571,6 +1770,19 @@ private fun copyToClipboard(
 
 private fun visibleMessageText(message: ChatMessage): String =
     message.text.ifBlank { message.error ?: "" }
+
+private fun companionStatus(uiState: MainUiState): String {
+    val activity = when {
+        uiState.isListening -> "listening"
+        uiState.isSpeaking -> "speaking"
+        uiState.isLoading -> uiState.presentation.state.ifBlank { "thinking" }
+        else -> uiState.presentation.state.ifBlank { "ready" }
+    }
+    val mood = uiState.presentation.mood
+        .takeUnless { it.isBlank() || it.equals("neutral", ignoreCase = true) }
+    return listOfNotNull(mood, activity, uiState.selectedAgent.label)
+        .joinToString(separator = "  |  ")
+}
 
 private fun copyableMessagesText(messages: List<ChatMessage>): String =
     messages.joinToString(separator = "\n\n") { message ->

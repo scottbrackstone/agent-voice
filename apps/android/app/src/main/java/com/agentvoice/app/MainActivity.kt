@@ -23,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.shortcut.AgentMessageNotifier
 import com.agentvoice.app.shortcut.VoiceShortcutNotifier
+import com.agentvoice.app.storage.InstallationIdRepository
 import com.agentvoice.app.ui.DrivingScreen
 import com.agentvoice.app.ui.MainScreen
 import com.agentvoice.app.ui.SettingsScreen
@@ -31,6 +32,7 @@ import com.agentvoice.app.viewmodel.MainViewModel
 import com.agentvoice.app.voice.SpeechInputManager
 import com.agentvoice.app.voice.TtsManager
 import com.agentvoice.app.voice.VoiceClipRecorder
+import com.google.firebase.messaging.FirebaseMessaging
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var speechInputManager: SpeechInputManager
     private lateinit var agentMessageNotifier: AgentMessageNotifier
     private lateinit var shortcutNotifier: VoiceShortcutNotifier
+    private lateinit var installationIdRepository: InstallationIdRepository
     private lateinit var ttsManager: TtsManager
     private lateinit var voiceClipRecorder: VoiceClipRecorder
 
@@ -61,6 +64,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var pendingAgentMessageNotification: Pair<String, String>? = null
+    private var pendingDrivingShortcutNotification = false
 
     private val requestAudioPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -77,12 +81,18 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
+            registerNotificationDevice()
             pendingAgentMessageNotification?.let { (title, text) ->
                 agentMessageNotifier.showMessage(title, text)
                 pendingAgentMessageNotification = null
-            } ?: showDrivingShortcutNotification()
+            }
+            if (pendingDrivingShortcutNotification) {
+                pendingDrivingShortcutNotification = false
+                showDrivingShortcutNotification()
+            }
         } else {
             pendingAgentMessageNotification = null
+            pendingDrivingShortcutNotification = false
             viewModel.onNotificationPermissionDenied()
         }
     }
@@ -92,6 +102,7 @@ class MainActivity : ComponentActivity() {
 
         agentMessageNotifier = AgentMessageNotifier(this)
         agentMessageNotifier.ensureChannel()
+        installationIdRepository = InstallationIdRepository(this)
         shortcutNotifier = VoiceShortcutNotifier(this)
         shortcutNotifier.ensureChannel()
         speechInputManager = SpeechInputManager(
@@ -186,6 +197,7 @@ class MainActivity : ComponentActivity() {
                         MainScreen(
                             uiState = uiState,
                             onModeSelected = viewModel::selectMode,
+                            onBackgroundSelected = viewModel::selectChatBackground,
                             onTalkClick = ::handleTalkClick,
                             onTypedMessageChange = viewModel::updateTypedMessage,
                             onSendTypedMessage = ::handleSendTypedMessage,
@@ -265,10 +277,12 @@ class MainActivity : ComponentActivity() {
         }
 
         handleShortcutIntent(intent)
+        ensureNotificationDeliveryReady()
     }
 
     override fun onResume() {
         super.onResume()
+        registerNotificationDevice()
         viewModel.syncPendingMessages()
         handsFreeHandler.removeCallbacks(inboxPollRunnable)
         handsFreeHandler.postDelayed(inboxPollRunnable, INBOX_POLL_INTERVAL_MS)
@@ -487,6 +501,7 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) {
+            pendingDrivingShortcutNotification = true
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
@@ -519,6 +534,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleShortcutIntent(intent: Intent?) {
+        val notificationThreadId = intent?.getStringExtra(AgentMessageNotifier.EXTRA_THREAD_ID)
+            ?: intent?.getStringExtra("threadId")
+        notificationThreadId?.let { threadId ->
+            viewModel.openThreadById(threadId)
+            intent?.removeExtra(AgentMessageNotifier.EXTRA_THREAD_ID)
+            intent?.removeExtra("threadId")
+        }
         when (intent?.action) {
             VoiceShortcutNotifier.ACTION_OPEN_DRIVING -> {
                 viewModel.openDrivingMode()
@@ -527,6 +549,31 @@ class MainActivity : ComponentActivity() {
             VoiceShortcutNotifier.ACTION_START_LISTENING -> {
                 viewModel.openDrivingMode()
                 handleStartHandsFreeSession()
+            }
+        }
+    }
+
+    private fun ensureNotificationDeliveryReady() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        registerNotificationDevice()
+    }
+
+    private fun registerNotificationDevice() {
+        val tokenTask = runCatching { FirebaseMessaging.getInstance().token }
+            .getOrNull() ?: return
+        tokenTask.addOnSuccessListener { token ->
+            if (token.isNotBlank()) {
+                viewModel.registerNotificationDevice(
+                    installationId = installationIdRepository.getOrCreate(),
+                    fcmToken = token
+                )
             }
         }
     }

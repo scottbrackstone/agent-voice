@@ -13,11 +13,6 @@ const HistoryParamsSchema = z.object({
   conversationId: z.string().trim().min(1)
 });
 
-const HistoryQuerySchema = z.object({
-  before: z.string().datetime().optional(),
-  limit: z.coerce.number().int().positive().max(100).optional()
-});
-
 const AckParamsSchema = z.object({
   id: z.string().trim().min(1)
 });
@@ -45,35 +40,6 @@ export function registerMessagesRoute(server: FastifyInstance, inbox: RelayInbox
       messages: messages.map(messageToWire),
       hasMore: messages.length === (parsed.data.limit ?? 20),
       serverTime: new Date().toISOString()
-    });
-  });
-
-  server.get("/api/threads/:conversationId/messages", async (request, reply) => {
-    const requestId = createRequestId();
-    const parsedParams = HistoryParamsSchema.safeParse(request.params);
-    const parsedQuery = HistoryQuerySchema.safeParse(request.query);
-
-    if (!parsedParams.success || !parsedQuery.success) {
-      return reply.status(400).send({
-        error: "Invalid thread history request",
-        requestId
-      });
-    }
-
-    if (!inbox.hasConversation(parsedParams.data.conversationId)) {
-      return reply.status(404).send({
-        error: "Thread not found",
-        requestId
-      });
-    }
-
-    const messages = inbox.history(parsedParams.data.conversationId, parsedQuery.data);
-
-    return reply.send({
-      conversationId: parsedParams.data.conversationId,
-      messages: messages.map(messageToWire),
-      hasMore: messages.length === (parsedQuery.data.limit ?? 20),
-      oldestMessageId: messages.at(0)?.id ?? null
     });
   });
 
