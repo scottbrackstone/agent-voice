@@ -21,6 +21,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentvoice.app.model.ConnectorType
+import com.agentvoice.app.shortcut.AgentMessageNotifier
 import com.agentvoice.app.shortcut.VoiceShortcutNotifier
 import com.agentvoice.app.ui.DrivingScreen
 import com.agentvoice.app.ui.MainScreen
@@ -39,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private val handsFreeHandler = Handler(Looper.getMainLooper())
     private lateinit var speechInputManager: SpeechInputManager
+    private lateinit var agentMessageNotifier: AgentMessageNotifier
     private lateinit var shortcutNotifier: VoiceShortcutNotifier
     private lateinit var ttsManager: TtsManager
     private lateinit var voiceClipRecorder: VoiceClipRecorder
@@ -50,6 +52,15 @@ class MainActivity : ComponentActivity() {
     private val handsFreeTimeoutRunnable = Runnable {
         stopHandsFreeSession("Stopped after 10 minutes")
     }
+
+    private val inboxPollRunnable = object : Runnable {
+        override fun run() {
+            viewModel.syncPendingMessages()
+            handsFreeHandler.postDelayed(this, INBOX_POLL_INTERVAL_MS)
+        }
+    }
+
+    private var pendingAgentMessageNotification: Pair<String, String>? = null
 
     private val requestAudioPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -66,8 +77,12 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            showDrivingShortcutNotification()
+            pendingAgentMessageNotification?.let { (title, text) ->
+                agentMessageNotifier.showMessage(title, text)
+                pendingAgentMessageNotification = null
+            } ?: showDrivingShortcutNotification()
         } else {
+            pendingAgentMessageNotification = null
             viewModel.onNotificationPermissionDenied()
         }
     }
@@ -75,6 +90,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        agentMessageNotifier = AgentMessageNotifier(this)
+        agentMessageNotifier.ensureChannel()
         shortcutNotifier = VoiceShortcutNotifier(this)
         shortcutNotifier.ensureChannel()
         speechInputManager = SpeechInputManager(
@@ -175,6 +192,28 @@ class MainActivity : ComponentActivity() {
                             onRetryClick = ::handleRetryClick,
                             onSpeakAgainClick = ::handleSpeakAgainClick,
                             onDrivingModeClick = viewModel::openDrivingMode,
+                            onThreadSelected = viewModel::selectThread,
+                            onThreadLongPress = viewModel::openThreadActions,
+                            onNewThreadClick = viewModel::createThread,
+                            onBackToThreads = viewModel::showThreadList,
+                            onRenameThreadClick = viewModel::startRenameSelectedThread,
+                            onRenameThreadFromActions = viewModel::startRenameThreadFromActions,
+                            onRequestDeleteThread = viewModel::requestDeleteThreadFromActions,
+                            onConfirmDeleteThread = viewModel::confirmDeleteThread,
+                            onCancelDeleteThread = viewModel::cancelDeleteThread,
+                            onCloseThreadActions = viewModel::closeThreadActions,
+                            onThreadTitleDraftChange = viewModel::updateThreadTitleDraft,
+                            onSaveThreadTitle = viewModel::saveThreadTitle,
+                            onCancelRenameThread = viewModel::cancelRenameThread,
+                            onMessageLongPress = viewModel::openMessageActions,
+                            onCloseMessageActions = viewModel::closeMessageActions,
+                            onCommandSelected = viewModel::openCommandPicker,
+                            onCommandOptionSelected = viewModel::selectCommandOption,
+                            onCommandTextChange = viewModel::updateCommandTextDraft,
+                            onSubmitCommandText = viewModel::submitCommandTextStep,
+                            onSkipCommandText = viewModel::skipCommandTextStep,
+                            onCommandBack = viewModel::backCommandStep,
+                            onCancelCommandPicker = viewModel::cancelCommandPicker,
                             onHistorySelected = viewModel::selectHistory,
                             onDismissHistory = viewModel::dismissHistoryDetail,
                             onTtsToggle = ::handleTtsToggle,
@@ -197,11 +236,47 @@ class MainActivity : ComponentActivity() {
                             scheduleHandsFreeRestart(HANDS_FREE_RECOVERY_DELAY_MS)
                         }
                     }
+
+                    LaunchedEffect(uiState.pendingImmediateCommandSignal) {
+                        if (
+                            uiState.pendingImmediateCommandSignal > 0 &&
+                            uiState.pendingImmediateCommand != null
+                        ) {
+                            viewModel.sendPendingImmediateCommand(::handleAgentSpeech)
+                        }
+                    }
+
+                    LaunchedEffect(uiState.incomingNotificationSignal) {
+                        val notificationTitle = uiState.incomingNotificationTitle
+                        val notificationText = uiState.incomingNotificationText
+                        if (
+                            uiState.incomingNotificationSignal > 0 &&
+                            !notificationTitle.isNullOrBlank() &&
+                            !notificationText.isNullOrBlank()
+                        ) {
+                            handleIncomingMessageNotification(
+                                title = notificationTitle,
+                                text = notificationText
+                            )
+                        }
+                    }
                 }
             }
         }
 
         handleShortcutIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.syncPendingMessages()
+        handsFreeHandler.removeCallbacks(inboxPollRunnable)
+        handsFreeHandler.postDelayed(inboxPollRunnable, INBOX_POLL_INTERVAL_MS)
+    }
+
+    override fun onPause() {
+        handsFreeHandler.removeCallbacks(inboxPollRunnable)
+        super.onPause()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -429,6 +504,20 @@ class MainActivity : ComponentActivity() {
         viewModel.onShortcutNotificationHidden()
     }
 
+    private fun handleIncomingMessageNotification(title: String, text: String) {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingAgentMessageNotification = title to text
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+
+        agentMessageNotifier.showMessage(title, text)
+    }
+
     private fun handleShortcutIntent(intent: Intent?) {
         when (intent?.action) {
             VoiceShortcutNotifier.ACTION_OPEN_DRIVING -> {
@@ -446,5 +535,6 @@ class MainActivity : ComponentActivity() {
         private const val HANDS_FREE_RESTART_DELAY_MS = 650L
         private const val HANDS_FREE_RECOVERY_DELAY_MS = 900L
         private const val HANDS_FREE_TIMEOUT_MS = 10 * 60 * 1000L
+        private const val INBOX_POLL_INTERVAL_MS = 15_000L
     }
 }

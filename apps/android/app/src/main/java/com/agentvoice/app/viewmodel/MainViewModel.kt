@@ -4,7 +4,13 @@ import android.app.Application
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.agentvoice.app.commands.CommandCatalog
+import com.agentvoice.app.commands.CommandCatalogRepository
+import com.agentvoice.app.commands.CommandOption
+import com.agentvoice.app.commands.HermesCommand
 import com.agentvoice.app.model.AgentMode
+import com.agentvoice.app.model.ChatMessage
+import com.agentvoice.app.model.ChatThread
 import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.model.ConversationRecord
 import com.agentvoice.app.model.QueuedAction
@@ -12,6 +18,8 @@ import com.agentvoice.app.model.QueuedActionStatus
 import com.agentvoice.app.network.RelayClient
 import com.agentvoice.app.storage.ConversationRepository
 import com.agentvoice.app.storage.SettingsRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -62,6 +70,29 @@ data class MainUiState(
     val lastRelayErrorMessage: String? = null,
     val lastVoiceCommand: String? = null,
     val lastIgnoredTranscript: String? = null,
+    val threads: List<ChatThread> = emptyList(),
+    val selectedThreadId: String? = null,
+    val activeThreadMessages: List<ChatMessage> = emptyList(),
+    val isThreadListVisible: Boolean = true,
+    val showRenameThread: Boolean = false,
+    val threadTitleDraft: String = "",
+    val renamingThreadId: String? = null,
+    val activeThreadActionId: String? = null,
+    val showThreadActions: Boolean = false,
+    val showDeleteThreadConfirmation: Boolean = false,
+    val activeMessageActionId: String? = null,
+    val commandCatalog: CommandCatalog = CommandCatalog.Empty,
+    val commandSuggestions: List<HermesCommand> = emptyList(),
+    val activeCommand: HermesCommand? = null,
+    val activeCommandStepIndex: Int = 0,
+    val commandSelections: Map<String, String> = emptyMap(),
+    val commandTextDraft: String = "",
+    val commandPickerError: String? = null,
+    val pendingImmediateCommand: String? = null,
+    val pendingImmediateCommandSignal: Int = 0,
+    val incomingNotificationTitle: String? = null,
+    val incomingNotificationText: String? = null,
+    val incomingNotificationSignal: Int = 0,
     val recentHistory: List<ConversationRecord> = emptyList(),
     val selectedHistory: ConversationRecord? = null,
     val backendUrl: String = SettingsRepository.DEFAULT_BACKEND_URL,
@@ -82,14 +113,37 @@ data class MainUiState(
         get() = !isLoading &&
             agentReply.isNotBlank() &&
             (ttsEnabled || (isDrivingMode && drivingAutoSpeak))
+
+    val selectedThread: ChatThread?
+        get() = threads.firstOrNull { it.id == selectedThreadId }
+
+    val actionThread: ChatThread?
+        get() = threads.firstOrNull { it.id == activeThreadActionId }
+
+    val activeMessageAction: ChatMessage?
+        get() = activeThreadMessages.firstOrNull { it.id == activeMessageActionId }
+
+    val activeCommandStep
+        get() = activeCommand?.steps?.getOrNull(activeCommandStepIndex)
+
+    val activeCommandOptions: List<CommandOption>
+        get() = activeCommand?.optionsForStep(activeCommandStepIndex, commandSelections)
+            .orEmpty()
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsRepository = SettingsRepository(application.applicationContext)
     private val conversationRepository = ConversationRepository(application.applicationContext)
+    private val commandCatalogRepository =
+        CommandCatalogRepository(application.applicationContext)
     private val relayClient = RelayClient()
     private var appliedInitialDrivingMode = false
+    private var initialSettingsLoaded = false
     private var allowNextWakeGatedUtterance = false
+    private var observedMessagesThreadId: String? = null
+    private var messagesJob: Job? = null
+    private var commandCatalogBackendUrl: String? = null
+    private var inboxSyncInFlight = false
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
@@ -99,6 +153,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             settingsRepository.migrateDefaultAgentToHermes()
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val catalog = commandCatalogRepository.load()
+            _uiState.update {
+                it.copy(
+                    commandCatalog = catalog,
+                    commandSuggestions = commandSuggestionsFor(it.typedMessage, catalog)
+                )
+            }
         }
 
         viewModelScope.launch {
@@ -123,6 +187,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isDrivingMode = it.isDrivingMode || shouldOpenDrivingMode
                     )
                 }
+                initialSettingsLoaded = true
+                refreshCommandCatalogFromRelay(settings.backendUrl)
+                if (
+                    _uiState.value.threads.isEmpty() &&
+                    _uiState.value.selectedThreadId == null
+                ) {
+                    val defaultThread = conversationRepository.ensureDefaultThread(
+                        connector = settings.selectedAgent,
+                        mode = settings.defaultMode
+                    )
+                    activateThread(defaultThread, openChat = false)
+                }
             }
         }
 
@@ -138,13 +214,423 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+
+        viewModelScope.launch {
+            conversationRepository.chatThreads.collect { threads ->
+                if (threads.isEmpty()) {
+                    if (!initialSettingsLoaded) {
+                        return@collect
+                    }
+
+                    val state = _uiState.value
+                    val defaultThread = conversationRepository.ensureDefaultThread(
+                        connector = state.selectedAgent,
+                        mode = state.mode
+                    )
+                    activateThread(defaultThread, openChat = false)
+                    return@collect
+                }
+
+                val currentThreadId = _uiState.value.selectedThreadId
+                val nextThread = threads.firstOrNull { it.id == currentThreadId } ?: threads.first()
+                if (nextThread.id != currentThreadId) {
+                    observeThreadMessages(nextThread.id)
+                }
+
+                _uiState.update {
+                    it.copy(
+                        threads = threads,
+                        selectedThreadId = nextThread.id,
+                        activeThreadMessages = if (nextThread.id == currentThreadId) {
+                            it.activeThreadMessages
+                        } else {
+                            emptyList()
+                        },
+                        selectedAgent = if (nextThread.id == currentThreadId) {
+                            it.selectedAgent
+                        } else {
+                            nextThread.connector
+                        },
+                        mode = if (nextThread.id == currentThreadId) {
+                            it.mode
+                        } else {
+                            nextThread.mode
+                        }
+                    )
+                }
+            }
+        }
     }
 
     fun selectMode(mode: AgentMode) {
         _uiState.update { it.copy(mode = mode) }
         viewModelScope.launch {
+            _uiState.value.selectedThreadId?.let { threadId ->
+                conversationRepository.updateThreadMode(threadId, mode)
+            }
             settingsRepository.setDefaultMode(mode)
         }
+    }
+
+    fun showThreadList() {
+        _uiState.update {
+            it.copy(
+                isThreadListVisible = true,
+                selectedHistory = null,
+                showThreadActions = false,
+                activeThreadActionId = null,
+                activeMessageActionId = null
+            )
+        }
+    }
+
+    fun selectThread(thread: ChatThread) {
+        activateThread(thread, openChat = true)
+    }
+
+    fun createThread() {
+        val state = _uiState.value
+        viewModelScope.launch {
+            val thread = conversationRepository.createThread(
+                title = ConversationRepository.DEFAULT_THREAD_TITLE,
+                connector = state.selectedAgent,
+                mode = state.mode
+            )
+            activateThread(thread, openChat = true)
+        }
+    }
+
+    fun startRenameSelectedThread() {
+        val threadId = _uiState.value.selectedThreadId ?: return
+        startRenameThread(threadId)
+    }
+
+    fun openThreadActions(thread: ChatThread) {
+        _uiState.update {
+            it.copy(
+                activeThreadActionId = thread.id,
+                showThreadActions = true,
+                showDeleteThreadConfirmation = false,
+                errorMessage = null
+            )
+        }
+    }
+
+    fun closeThreadActions() {
+        _uiState.update { it.copy(showThreadActions = false, activeThreadActionId = null) }
+    }
+
+    fun startRenameThreadFromActions() {
+        val threadId = _uiState.value.activeThreadActionId ?: return
+        _uiState.update { it.copy(showThreadActions = false) }
+        startRenameThread(threadId)
+    }
+
+    private fun startRenameThread(threadId: String) {
+        val title = _uiState.value.threads.firstOrNull { it.id == threadId }?.title ?: return
+        _uiState.update {
+            it.copy(
+                showRenameThread = true,
+                threadTitleDraft = title,
+                renamingThreadId = threadId,
+                errorMessage = null
+            )
+        }
+    }
+
+    fun updateThreadTitleDraft(title: String) {
+        _uiState.update { it.copy(threadTitleDraft = title, errorMessage = null) }
+    }
+
+    fun cancelRenameThread() {
+        _uiState.update {
+            it.copy(
+                showRenameThread = false,
+                threadTitleDraft = "",
+                renamingThreadId = null
+            )
+        }
+    }
+
+    fun saveThreadTitle() {
+        val state = _uiState.value
+        val threadId = state.renamingThreadId ?: state.selectedThreadId ?: return
+        val title = state.threadTitleDraft.trim()
+        viewModelScope.launch {
+            conversationRepository.renameThread(threadId, title)
+            _uiState.update {
+                it.copy(
+                    showRenameThread = false,
+                    threadTitleDraft = "",
+                    renamingThreadId = null,
+                    activeThreadActionId = null,
+                    connectionStatus = "Thread renamed",
+                    errorMessage = null
+                )
+            }
+        }
+    }
+
+    fun requestDeleteThreadFromActions() {
+        if (_uiState.value.activeThreadActionId == null) {
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                showThreadActions = false,
+                showDeleteThreadConfirmation = true,
+                errorMessage = null
+            )
+        }
+    }
+
+    fun cancelDeleteThread() {
+        _uiState.update {
+            it.copy(
+                showDeleteThreadConfirmation = false,
+                activeThreadActionId = null
+            )
+        }
+    }
+
+    fun confirmDeleteThread() {
+        val state = _uiState.value
+        val threadId = state.activeThreadActionId ?: return
+        val deletingSelectedThread = threadId == state.selectedThreadId
+
+        viewModelScope.launch {
+            val deleted = conversationRepository.deleteThreadLocally(threadId)
+            _uiState.update {
+                it.copy(
+                    showDeleteThreadConfirmation = false,
+                    activeThreadActionId = null,
+                    selectedThreadId = if (deletingSelectedThread) null else it.selectedThreadId,
+                    activeThreadMessages = if (deletingSelectedThread) {
+                        emptyList()
+                    } else {
+                        it.activeThreadMessages
+                    },
+                    isThreadListVisible = true,
+                    connectionStatus = if (deleted) {
+                        "Chat deleted from this app"
+                    } else {
+                        "Chat already removed"
+                    },
+                    errorMessage = null
+                )
+            }
+        }
+    }
+
+    fun openMessageActions(message: ChatMessage) {
+        _uiState.update {
+            it.copy(activeMessageActionId = message.id)
+        }
+    }
+
+    fun closeMessageActions() {
+        _uiState.update { it.copy(activeMessageActionId = null) }
+    }
+
+    fun openCommandPicker(command: HermesCommand) {
+        if (command.steps.isEmpty()) {
+            completeCommand(command, emptyMap())
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                activeCommand = command,
+                activeCommandStepIndex = 0,
+                commandSelections = emptyMap(),
+                commandTextDraft = "",
+                commandPickerError = null,
+                commandSuggestions = emptyList(),
+                errorMessage = null
+            )
+        }
+    }
+
+    fun cancelCommandPicker() {
+        _uiState.update {
+            it.copy(
+                activeCommand = null,
+                activeCommandStepIndex = 0,
+                commandSelections = emptyMap(),
+                commandTextDraft = "",
+                commandPickerError = null
+            )
+        }
+    }
+
+    fun selectCommandOption(option: CommandOption) {
+        val state = _uiState.value
+        val command = state.activeCommand ?: return
+        val step = state.activeCommandStep ?: return
+        val nextSelections = selectionsBeforeActiveStep(command, state) + (step.id to option.value)
+        advanceCommand(command, nextSelections)
+    }
+
+    fun updateCommandTextDraft(value: String) {
+        _uiState.update {
+            it.copy(commandTextDraft = value, commandPickerError = null)
+        }
+    }
+
+    fun submitCommandTextStep() {
+        val state = _uiState.value
+        val command = state.activeCommand ?: return
+        val step = state.activeCommandStep ?: return
+        val value = state.commandTextDraft.trim()
+        if (step.required && value.isBlank()) {
+            _uiState.update {
+                it.copy(commandPickerError = "Enter ${step.label.lowercase()}.")
+            }
+            return
+        }
+
+        val baseSelections = selectionsBeforeActiveStep(command, state)
+        val nextSelections = if (value.isBlank()) {
+            baseSelections
+        } else {
+            baseSelections + (step.id to value)
+        }
+        advanceCommand(command, nextSelections)
+    }
+
+    fun skipCommandTextStep() {
+        val state = _uiState.value
+        val command = state.activeCommand ?: return
+        val step = state.activeCommandStep ?: return
+        if (step.required) {
+            return
+        }
+
+        advanceCommand(command, selectionsBeforeActiveStep(command, state))
+    }
+
+    fun backCommandStep() {
+        _uiState.update {
+            if (it.activeCommandStepIndex <= 0) {
+                it
+            } else {
+                it.copy(
+                    activeCommandStepIndex = it.activeCommandStepIndex - 1,
+                    commandTextDraft = "",
+                    commandPickerError = null
+                )
+            }
+        }
+    }
+
+    private fun advanceCommand(
+        command: HermesCommand,
+        selections: Map<String, String>
+    ) {
+        val nextStepIndex = _uiState.value.activeCommandStepIndex + 1
+        if (nextStepIndex >= command.steps.size) {
+            completeCommand(command, selections)
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                commandSelections = selections,
+                activeCommandStepIndex = nextStepIndex,
+                commandTextDraft = "",
+                commandPickerError = null
+            )
+        }
+    }
+
+    private fun completeCommand(
+        command: HermesCommand,
+        selections: Map<String, String>
+    ) {
+        val renderedCommand = command.render(selections)
+        val shouldSendImmediately = command.sendMode == COMMAND_SEND_IMMEDIATELY
+        _uiState.update {
+            it.copy(
+                typedMessage = if (shouldSendImmediately) it.typedMessage else renderedCommand,
+                activeCommand = null,
+                activeCommandStepIndex = 0,
+                commandSelections = emptyMap(),
+                commandTextDraft = "",
+                commandPickerError = null,
+                commandSuggestions = emptyList(),
+                pendingImmediateCommand = if (shouldSendImmediately) renderedCommand else it.pendingImmediateCommand,
+                pendingImmediateCommandSignal = if (shouldSendImmediately) {
+                    it.pendingImmediateCommandSignal + 1
+                } else {
+                    it.pendingImmediateCommandSignal
+                },
+                errorMessage = null
+            )
+        }
+    }
+
+    fun sendPendingImmediateCommand(speak: (String) -> Unit) {
+        val command = _uiState.value.pendingImmediateCommand ?: return
+        _uiState.update { it.copy(pendingImmediateCommand = null) }
+        submitTranscript(command, speak)
+    }
+
+    fun syncPendingMessages() {
+        val snapshot = _uiState.value
+        val threadId = snapshot.selectedThreadId ?: return
+        val backendUrl = snapshot.backendUrl
+        if (inboxSyncInFlight || backendUrl.isBlank()) {
+            return
+        }
+
+        inboxSyncInFlight = true
+        viewModelScope.launch {
+            try {
+                relayClient
+                    .fetchPendingMessages(
+                        backendUrl = backendUrl,
+                        conversationId = threadId
+                    )
+                    .onSuccess { messages ->
+                        val inserted = conversationRepository.saveIncomingRelayMessages(
+                            threadId = threadId,
+                            messages = messages
+                        )
+                        messages.forEach { message ->
+                            relayClient.acknowledgeMessage(backendUrl, message.id)
+                        }
+                        if (inserted.isNotEmpty()) {
+                            val latest = inserted.last()
+                            _uiState.update {
+                                it.copy(
+                                    connectionStatus = if (inserted.size == 1) {
+                                        "Received 1 new message"
+                                    } else {
+                                        "Received ${inserted.size} new messages"
+                                    },
+                                    incomingNotificationTitle = latest.role.label,
+                                    incomingNotificationText = latest.text,
+                                    incomingNotificationSignal = it.incomingNotificationSignal + 1
+                                )
+                            }
+                        }
+                    }
+            } finally {
+                inboxSyncInFlight = false
+            }
+        }
+    }
+
+    private fun selectionsBeforeActiveStep(
+        command: HermesCommand,
+        state: MainUiState
+    ): Map<String, String> {
+        val previousStepIds = command.steps
+            .take(state.activeCommandStepIndex)
+            .map { it.id }
+            .toSet()
+        return state.commandSelections.filterKeys { it in previousStepIds }
     }
 
     fun onListeningStarted() {
@@ -289,7 +775,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateTypedMessage(message: String) {
-        _uiState.update { it.copy(typedMessage = message, errorMessage = null) }
+        _uiState.update {
+            it.copy(
+                typedMessage = message,
+                commandSuggestions = commandSuggestionsFor(message, it.commandCatalog),
+                errorMessage = null
+            )
+        }
     }
 
     fun sendTypedMessage(speak: (String) -> Unit) {
@@ -349,15 +841,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
+            val activeThreadId = snapshot.selectedThreadId ?: conversationRepository
+                .ensureDefaultThread(agent, mode)
+                .also { activateThread(it, openChat = false) }
+                .id
+
+            conversationRepository.saveUserMessage(activeThreadId, trimmedTranscript)
+
             relayClient
                 .sendMessage(
                     backendUrl = snapshot.backendUrl,
                     agent = agent,
                     message = trimmedTranscript,
-                    mode = mode
+                    mode = mode,
+                    conversationId = activeThreadId
                 )
                 .onSuccess { response ->
                     conversationRepository.saveResponse(trimmedTranscript, response)
+                    conversationRepository.saveAssistantResponse(activeThreadId, response)
                     _uiState.update {
                         it.copy(
                             isLoading = false,
@@ -408,6 +909,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         transcript = trimmedTranscript,
                         mode = mode,
                         connector = agent,
+                        error = message
+                    )
+                    conversationRepository.saveAssistantFailure(
+                        threadId = activeThreadId,
+                        connector = agent,
+                        mode = mode,
                         error = message
                     )
                     _uiState.update {
@@ -642,6 +1149,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectAgent(agent: ConnectorType) {
         _uiState.update { it.copy(selectedAgent = agent) }
         viewModelScope.launch {
+            _uiState.value.selectedThreadId?.let { threadId ->
+                conversationRepository.updateThreadConnector(threadId, agent)
+            }
             settingsRepository.setSelectedAgent(agent)
         }
     }
@@ -783,6 +1293,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } else {
                 it
+            }
+        }
+    }
+
+    private fun activateThread(thread: ChatThread, openChat: Boolean) {
+        observeThreadMessages(thread.id)
+        _uiState.update {
+            val isChangingThread = it.selectedThreadId != thread.id
+            it.copy(
+                selectedThreadId = thread.id,
+                activeThreadMessages = if (!isChangingThread) {
+                    it.activeThreadMessages
+                } else {
+                    emptyList()
+                },
+                isThreadListVisible = if (openChat) false else it.isThreadListVisible,
+                selectedAgent = thread.connector,
+                mode = thread.mode,
+                typedMessage = "",
+                transcript = if (isChangingThread) "" else it.transcript,
+                agentReply = if (isChangingThread) "" else it.agentReply,
+                queuedActions = if (isChangingThread) emptyList() else it.queuedActions,
+                warnings = if (isChangingThread) emptyList() else it.warnings,
+                selectedHistory = null,
+                errorMessage = null
+            )
+        }
+    }
+
+    private fun observeThreadMessages(threadId: String) {
+        if (observedMessagesThreadId == threadId) {
+            return
+        }
+
+        observedMessagesThreadId = threadId
+        messagesJob?.cancel()
+        messagesJob = viewModelScope.launch {
+            conversationRepository.messagesForThread(threadId).collect { messages ->
+                _uiState.update {
+                    if (it.selectedThreadId == threadId) {
+                        it.copy(activeThreadMessages = messages)
+                    } else {
+                        it
+                    }
+                }
             }
         }
     }
@@ -1122,6 +1677,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return (listOf(trimmed) + existing).distinct().take(5)
     }
 
+    private fun commandSuggestionsFor(
+        message: String,
+        catalog: CommandCatalog
+    ): List<HermesCommand> {
+        val trimmed = message.trimStart()
+        if (!trimmed.startsWith("/") || trimmed.contains(Regex("\\s"))) {
+            return emptyList()
+        }
+
+        return catalog.matchingCommands(trimmed).take(MAX_COMMAND_SUGGESTIONS)
+    }
+
+    private fun refreshCommandCatalogFromRelay(backendUrl: String) {
+        val trimmedBackendUrl = backendUrl.trim()
+        if (
+            trimmedBackendUrl.isBlank() ||
+            trimmedBackendUrl == commandCatalogBackendUrl
+        ) {
+            return
+        }
+
+        commandCatalogBackendUrl = trimmedBackendUrl
+        viewModelScope.launch(Dispatchers.IO) {
+            relayClient
+                .fetchCommandCatalog(trimmedBackendUrl)
+                .mapCatching { catalogJson -> commandCatalogRepository.parse(catalogJson) }
+                .onSuccess { catalog ->
+                    if (catalog.commands.isEmpty()) {
+                        return@onSuccess
+                    }
+                    _uiState.update {
+                        it.copy(
+                            commandCatalog = catalog,
+                            commandSuggestions = commandSuggestionsFor(it.typedMessage, catalog)
+                        )
+                    }
+                }
+        }
+    }
+
     private fun modeOverrideForDrivingPhrase(transcript: String): AgentMode? {
         val normalized = normalizeVoiceText(transcript)
         return when {
@@ -1207,5 +1802,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) {
             "unknown"
         }
+    }
+
+    companion object {
+        private const val MAX_COMMAND_SUGGESTIONS = 6
+        private const val COMMAND_SEND_IMMEDIATELY = "send_immediately"
     }
 }
