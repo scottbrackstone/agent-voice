@@ -5,6 +5,8 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.agentvoice.app.model.AgentMode
+import com.agentvoice.app.model.AvatarModels
+import com.agentvoice.app.model.ChatBackground
 import com.agentvoice.app.model.ChatMessage
 import com.agentvoice.app.model.ChatMessageRole
 import com.agentvoice.app.model.ChatMessageStatus
@@ -19,7 +21,9 @@ data class ChatThreadEntity(
     val connector: String,
     val mode: String,
     val createdAtMillis: Long,
-    val updatedAtMillis: Long
+    val updatedAtMillis: Long,
+    val backgroundId: String = ChatBackground.DEFAULT_ID,
+    val avatarModelId: String = AvatarModels.SOLARA_STATIC
 ) {
     fun toModel(): ChatThread =
         ChatThread(
@@ -29,7 +33,9 @@ data class ChatThreadEntity(
             connector = ConnectorType.fromValue(connector, fallback = ConnectorType.Hermes),
             mode = AgentMode.fromWireValue(mode),
             createdAtMillis = createdAtMillis,
-            updatedAtMillis = updatedAtMillis
+            updatedAtMillis = updatedAtMillis,
+            backgroundId = backgroundId,
+            avatarModelId = avatarModelId
         )
 }
 

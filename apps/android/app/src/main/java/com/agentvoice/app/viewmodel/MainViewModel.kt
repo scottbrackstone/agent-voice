@@ -9,12 +9,16 @@ import com.agentvoice.app.commands.CommandCatalogRepository
 import com.agentvoice.app.commands.CommandOption
 import com.agentvoice.app.commands.HermesCommand
 import com.agentvoice.app.model.AgentMode
+import com.agentvoice.app.model.AgentPresentation
 import com.agentvoice.app.model.ChatMessage
 import com.agentvoice.app.model.ChatThread
 import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.model.ConversationRecord
 import com.agentvoice.app.model.QueuedAction
 import com.agentvoice.app.model.QueuedActionStatus
+import com.agentvoice.app.model.RunStreamEvent
+import com.agentvoice.app.model.ChatMessageStatus
+import com.agentvoice.app.model.ChatBackground
 import com.agentvoice.app.network.RelayClient
 import com.agentvoice.app.storage.ConversationRepository
 import com.agentvoice.app.storage.SettingsRepository
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 data class MainUiState(
     val connectionStatus: String = "Relay not connected",
@@ -93,6 +98,10 @@ data class MainUiState(
     val incomingNotificationTitle: String? = null,
     val incomingNotificationText: String? = null,
     val incomingNotificationSignal: Int = 0,
+    val activeRunId: String? = null,
+    val streamingReply: String = "",
+    val toolProgressMessage: String? = null,
+    val presentation: AgentPresentation = AgentPresentation(),
     val recentHistory: List<ConversationRecord> = emptyList(),
     val selectedHistory: ConversationRecord? = null,
     val backendUrl: String = SettingsRepository.DEFAULT_BACKEND_URL,
@@ -144,6 +153,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var messagesJob: Job? = null
     private var commandCatalogBackendUrl: String? = null
     private var inboxSyncInFlight = false
+    private var canonicalSyncInFlight = false
+    private var pendingDeviceRegistration: Pair<String, String>? = null
+    private var registeredDeviceKey: String? = null
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState
@@ -188,7 +200,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 initialSettingsLoaded = true
+                registerPendingNotificationDevice()
                 refreshCommandCatalogFromRelay(settings.backendUrl)
+                if (settings.selectedAgent == ConnectorType.Hermes) {
+                    syncCanonicalThreads()
+                    return@collect
+                }
                 if (
                     _uiState.value.threads.isEmpty() &&
                     _uiState.value.selectedThreadId == null
@@ -223,6 +240,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val state = _uiState.value
+                    if (state.selectedAgent == ConnectorType.Hermes) {
+                        _uiState.update {
+                            it.copy(
+                                threads = emptyList(),
+                                selectedThreadId = null,
+                                activeThreadMessages = emptyList()
+                            )
+                        }
+                        return@collect
+                    }
                     val defaultThread = conversationRepository.ensureDefaultThread(
                         connector = state.selectedAgent,
                         mode = state.mode
@@ -272,6 +299,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun selectChatBackground(backgroundId: String) {
+        val selected = ChatBackground.fromId(backgroundId)
+        val threadId = _uiState.value.selectedThreadId ?: return
+        viewModelScope.launch {
+            conversationRepository.updateThreadBackground(threadId, selected.id)
+        }
+    }
+
     fun showThreadList() {
         _uiState.update {
             it.copy(
@@ -286,17 +321,92 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectThread(thread: ChatThread) {
         activateThread(thread, openChat = true)
+        if (thread.connector == ConnectorType.Hermes) {
+            syncCanonicalMessages(thread.id)
+        }
+    }
+
+    fun openThreadById(threadId: String) {
+        viewModelScope.launch {
+            conversationRepository.getThread(threadId)?.let { thread ->
+                selectThread(thread)
+                return@launch
+            }
+
+            val backendUrl = _uiState.value.backendUrl
+            relayClient.fetchCanonicalThreads(backendUrl)
+                .onSuccess { threads ->
+                    conversationRepository.upsertCanonicalThreads(threads)
+                    conversationRepository.getThread(threadId)?.let { thread ->
+                        selectThread(thread)
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(lastRelayErrorMessage = error.message)
+                    }
+                }
+        }
+    }
+
+    fun registerNotificationDevice(installationId: String, fcmToken: String) {
+        if (installationId.isBlank() || fcmToken.isBlank()) return
+        pendingDeviceRegistration = installationId to fcmToken
+        registerPendingNotificationDevice()
+    }
+
+    private fun registerPendingNotificationDevice() {
+        val (installationId, fcmToken) = pendingDeviceRegistration ?: return
+        val backendUrl = _uiState.value.backendUrl
+        if (backendUrl.isBlank()) return
+        val registrationKey = "$backendUrl|$installationId|$fcmToken"
+        if (registrationKey == registeredDeviceKey) return
+
+        viewModelScope.launch {
+            relayClient.registerDevice(backendUrl, installationId, fcmToken)
+                .onSuccess {
+                    registeredDeviceKey = registrationKey
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            lastRelayErrorMessage =
+                                "Notifications are not connected: ${error.message}"
+                        )
+                    }
+                }
+        }
     }
 
     fun createThread() {
         val state = _uiState.value
         viewModelScope.launch {
-            val thread = conversationRepository.createThread(
-                title = ConversationRepository.DEFAULT_THREAD_TITLE,
-                connector = state.selectedAgent,
-                mode = state.mode
-            )
-            activateThread(thread, openChat = true)
+            if (state.selectedAgent == ConnectorType.Hermes) {
+                _uiState.update { it.copy(isLoading = true, connectionStatus = "Creating Hermes chat") }
+                relayClient.createCanonicalThread(
+                    backendUrl = state.backendUrl,
+                    title = ConversationRepository.DEFAULT_THREAD_TITLE
+                ).onSuccess { canonical ->
+                    val thread = conversationRepository.upsertCanonicalThread(canonical, state.mode)
+                    activateThread(thread, openChat = true)
+                    _uiState.update { it.copy(isLoading = false, connectionStatus = "Hermes chat ready") }
+                }.onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            connectionStatus = "Unable to create chat",
+                            errorMessage = error.message ?: "Unable to create Hermes chat."
+                        )
+                    }
+                }
+            } else {
+                val thread = conversationRepository.createThread(
+                    title = ConversationRepository.DEFAULT_THREAD_TITLE,
+                    connector = state.selectedAgent,
+                    mode = state.mode
+                )
+                activateThread(thread, openChat = true)
+            }
         }
     }
 
@@ -357,16 +467,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val threadId = state.renamingThreadId ?: state.selectedThreadId ?: return
         val title = state.threadTitleDraft.trim()
         viewModelScope.launch {
-            conversationRepository.renameThread(threadId, title)
-            _uiState.update {
-                it.copy(
-                    showRenameThread = false,
-                    threadTitleDraft = "",
-                    renamingThreadId = null,
-                    activeThreadActionId = null,
-                    connectionStatus = "Thread renamed",
-                    errorMessage = null
-                )
+            val renameResult = if (state.selectedAgent == ConnectorType.Hermes) {
+                relayClient.renameCanonicalThread(state.backendUrl, threadId, title)
+                    .map { Unit }
+            } else {
+                Result.success(Unit)
+            }
+            renameResult.onSuccess {
+                conversationRepository.renameThread(threadId, title)
+                _uiState.update {
+                    it.copy(
+                        showRenameThread = false,
+                        threadTitleDraft = "",
+                        renamingThreadId = null,
+                        activeThreadActionId = null,
+                        connectionStatus = "Thread renamed",
+                        errorMessage = null
+                    )
+                }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(errorMessage = error.message ?: "Unable to rename Hermes chat.")
+                }
             }
         }
     }
@@ -573,11 +695,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun sendPendingImmediateCommand(speak: (String) -> Unit) {
         val command = _uiState.value.pendingImmediateCommand ?: return
         _uiState.update { it.copy(pendingImmediateCommand = null) }
-        submitTranscript(command, speak)
+        submitTranscript(command, speak, inputType = "text")
     }
 
     fun syncPendingMessages() {
         val snapshot = _uiState.value
+        if (snapshot.selectedAgent == ConnectorType.Hermes) {
+            syncCanonicalThreads(syncActiveMessages = true)
+            return
+        }
         val threadId = snapshot.selectedThreadId ?: return
         val backendUrl = snapshot.backendUrl
         if (inboxSyncInFlight || backendUrl.isBlank()) {
@@ -619,6 +745,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 inboxSyncInFlight = false
             }
+        }
+    }
+
+    private fun syncCanonicalThreads(syncActiveMessages: Boolean = false) {
+        val snapshot = _uiState.value
+        if (canonicalSyncInFlight || snapshot.backendUrl.isBlank()) return
+        canonicalSyncInFlight = true
+        viewModelScope.launch {
+            try {
+                relayClient.fetchCanonicalThreads(snapshot.backendUrl)
+                    .onSuccess { threads ->
+                        conversationRepository.upsertCanonicalThreads(threads)
+                        _uiState.update {
+                            it.copy(
+                                connectionStatus = "Hermes synced",
+                                errorMessage = null
+                            )
+                        }
+                        if (syncActiveMessages) {
+                            val activeId = _uiState.value.selectedThreadId
+                            if (activeId != null) syncCanonicalMessages(activeId)
+                        }
+                    }
+                    .onFailure { error ->
+                        _uiState.update {
+                            it.copy(
+                                connectionStatus = "Hermes sync unavailable",
+                                lastRelayErrorMessage = error.message
+                            )
+                        }
+                    }
+            } finally {
+                canonicalSyncInFlight = false
+            }
+        }
+    }
+
+    private fun syncCanonicalMessages(threadId: String) {
+        val backendUrl = _uiState.value.backendUrl
+        viewModelScope.launch {
+            relayClient.fetchCanonicalMessages(backendUrl, threadId)
+                .onSuccess { messages ->
+                    conversationRepository.replaceWithCanonicalMessages(threadId, messages)
+                    _uiState.update {
+                        it.copy(
+                            connectionStatus = "Hermes history synced",
+                            errorMessage = null
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(lastRelayErrorMessage = error.message)
+                    }
+                }
         }
     }
 
@@ -785,7 +966,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendTypedMessage(speak: (String) -> Unit) {
-        submitTranscript(_uiState.value.typedMessage, speak, clearTypedMessage = true)
+        submitTranscript(
+            _uiState.value.typedMessage,
+            speak,
+            clearTypedMessage = true,
+            inputType = "text"
+        )
     }
 
     fun sendTestPrompt(agent: ConnectorType, speak: (String) -> Unit) {
@@ -802,7 +988,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         speak: (String) -> Unit,
         clearTypedMessage: Boolean = false,
         agentOverride: ConnectorType? = null,
-        modeOverride: AgentMode? = null
+        modeOverride: AgentMode? = null,
+        inputType: String = "voice"
     ) {
         val trimmedTranscript = transcript.trim()
         if (trimmedTranscript.isBlank()) {
@@ -816,6 +1003,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             snapshot.drivingMode
         } else {
             snapshot.mode
+        }
+        if (agent == ConnectorType.Hermes) {
+            submitCanonicalTranscript(
+                transcript = trimmedTranscript,
+                mode = mode,
+                inputType = inputType,
+                clearTypedMessage = clearTypedMessage,
+                speak = speak
+            )
+            return
         }
         _uiState.update {
             it.copy(
@@ -947,6 +1144,210 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 }
+        }
+    }
+
+    private fun submitCanonicalTranscript(
+        transcript: String,
+        mode: AgentMode,
+        inputType: String,
+        clearTypedMessage: Boolean,
+        speak: (String) -> Unit
+    ) {
+        val snapshot = _uiState.value
+        _uiState.update {
+            it.copy(
+                isListening = false,
+                isLoading = true,
+                transcript = transcript,
+                agentReply = "",
+                streamingReply = "",
+                toolProgressMessage = null,
+                presentation = AgentPresentation(state = "thinking", motionHint = "think"),
+                errorMessage = null,
+                lastTranscript = transcript,
+                typedMessage = if (clearTypedMessage) "" else it.typedMessage,
+                connectionStatus = if (it.isHandsFreeSessionActive) "Thinking" else "Starting Hermes run",
+                handsFreeSessionStatus = if (it.isHandsFreeSessionActive) "Thinking" else it.handsFreeSessionStatus
+            )
+        }
+
+        viewModelScope.launch {
+            val thread = snapshot.selectedThreadId?.let { conversationRepository.getThread(it) }
+                ?: relayClient.createCanonicalThread(
+                    backendUrl = snapshot.backendUrl,
+                    title = ConversationRepository.DEFAULT_THREAD_TITLE
+                ).getOrElse { error ->
+                    finishCanonicalFailure(error.message ?: "Unable to create Hermes chat.")
+                    return@launch
+                }.let { canonical ->
+                    conversationRepository.upsertCanonicalThread(canonical, mode).also {
+                        activateThread(it, openChat = !snapshot.isDrivingMode)
+                    }
+                }
+
+            val clientMessageId = "client_${UUID.randomUUID()}"
+            conversationRepository.saveCanonicalUserMessage(thread.id, clientMessageId, transcript)
+            val run = relayClient.startMessageRun(
+                backendUrl = snapshot.backendUrl,
+                threadId = thread.id,
+                clientMessageId = clientMessageId,
+                content = transcript,
+                mode = mode,
+                inputType = inputType
+            ).getOrElse { error ->
+                conversationRepository.updateCanonicalUserStatus(clientMessageId, ChatMessageStatus.Failed)
+                finishCanonicalFailure(error.message ?: "Unable to start Hermes response.")
+                return@launch
+            }
+
+            conversationRepository.updateCanonicalUserStatus(clientMessageId, ChatMessageStatus.Sent)
+            _uiState.update {
+                it.copy(
+                    activeRunId = run.runId,
+                    connectionStatus = "Solara is thinking",
+                    presentation = AgentPresentation(state = "thinking", motionHint = "think")
+                )
+            }
+            var streamedText = ""
+            relayClient.streamRunEvents(snapshot.backendUrl, run.runId) { event ->
+                when (event) {
+                    is RunStreamEvent.Started -> Unit
+                    is RunStreamEvent.Delta -> {
+                        streamedText += event.text
+                        _uiState.update {
+                            it.copy(
+                                streamingReply = streamedText,
+                                agentReply = streamedText,
+                                connectionStatus = "Solara is replying",
+                                presentation = it.presentation.copy(
+                                    state = "speaking",
+                                    motionHint = "speak"
+                                )
+                            )
+                        }
+                        viewModelScope.launch {
+                            conversationRepository.saveStreamingAssistantMessage(
+                                threadId = thread.id,
+                                runId = run.runId,
+                                text = streamedText,
+                                status = ChatMessageStatus.Partial
+                            )
+                        }
+                    }
+                    is RunStreamEvent.ToolProgress -> {
+                        _uiState.update {
+                            it.copy(
+                                toolProgressMessage = "${event.label} - ${event.status}",
+                                connectionStatus = event.label,
+                                presentation = it.presentation.copy(
+                                    state = "tool",
+                                    motionHint = "think"
+                                )
+                            )
+                        }
+                    }
+                    is RunStreamEvent.Presentation -> {
+                        _uiState.update { it.copy(presentation = event.value) }
+                    }
+                    is RunStreamEvent.Completed -> {
+                        streamedText = event.text.ifBlank { streamedText }
+                        _uiState.update {
+                            it.copy(
+                                presentation = event.presentation,
+                                streamingReply = streamedText,
+                                agentReply = streamedText
+                            )
+                        }
+                    }
+                    is RunStreamEvent.Failed -> {
+                        _uiState.update { it.copy(lastRelayErrorMessage = event.error) }
+                    }
+                    RunStreamEvent.Cancelled -> Unit
+                }
+            }
+
+            val finalRun = relayClient.fetchMessageRun(snapshot.backendUrl, run.runId)
+                .getOrNull()
+            when (finalRun?.status) {
+                "completed" -> {
+                    val replyText = finalRun.replyText.ifBlank { streamedText }
+                    conversationRepository.saveStreamingAssistantMessage(
+                        threadId = thread.id,
+                        runId = run.runId,
+                        text = replyText,
+                        status = ChatMessageStatus.Completed
+                    )
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            activeRunId = null,
+                            streamingReply = "",
+                            toolProgressMessage = null,
+                            agentReply = replyText,
+                            connectionStatus = "Solara replied",
+                            presentation = finalRun.presentation,
+                            lastConnector = ConnectorType.Hermes,
+                            lastRequestId = run.runId,
+                            errorMessage = null,
+                            handsFreeTurns = if (it.isHandsFreeSessionActive) it.handsFreeTurns + 1 else it.handsFreeTurns,
+                            handsFreeSessionStatus = if (it.isHandsFreeSessionActive) "Reply received" else it.handsFreeSessionStatus
+                        )
+                    }
+                    syncCanonicalMessages(thread.id)
+                    val latestState = _uiState.value
+                    if (
+                        latestState.ttsEnabled ||
+                        (latestState.isDrivingMode && latestState.drivingAutoSpeak) ||
+                        latestState.isHandsFreeSessionActive
+                    ) {
+                        speak(replyText)
+                    }
+                }
+                "failed" -> finishCanonicalFailure(finalRun.error ?: "Hermes response failed.")
+                "cancelled" -> finishCanonicalFailure("Hermes response was cancelled.")
+                else -> {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            activeRunId = run.runId,
+                            connectionStatus = "Solara is continuing in the background",
+                            errorMessage = null
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun finishCanonicalFailure(message: String) {
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                activeRunId = null,
+                streamingReply = "",
+                toolProgressMessage = null,
+                connectionStatus = "Hermes error",
+                errorMessage = message,
+                lastErrorMessage = message,
+                lastRelayErrorMessage = message,
+                presentation = AgentPresentation(
+                    mood = "concerned",
+                    intensity = 0.6f,
+                    state = "error",
+                    motionHint = "reassure"
+                ),
+                handsFreeRecoveryCount = if (it.isHandsFreeSessionActive) {
+                    it.handsFreeRecoveryCount + 1
+                } else {
+                    it.handsFreeRecoveryCount
+                },
+                handsFreeRestartSignal = if (it.isHandsFreeSessionActive) {
+                    it.handsFreeRestartSignal + 1
+                } else {
+                    it.handsFreeRestartSignal
+                }
+            )
         }
     }
 
@@ -1147,7 +1548,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectAgent(agent: ConnectorType) {
-        _uiState.update { it.copy(selectedAgent = agent) }
+        _uiState.update {
+            it.copy(
+                selectedAgent = agent,
+                connectionStatus = when (agent) {
+                    ConnectorType.Hermes -> "Connecting to Hermes"
+                    ConnectorType.Mock -> "Mock ready"
+                    ConnectorType.OpenClaw -> "OpenClaw selected"
+                    ConnectorType.Relay -> "Relay selected"
+                    ConnectorType.Webhook -> "Webhook selected"
+                },
+                lastRelayErrorMessage = null
+            )
+        }
         viewModelScope.launch {
             _uiState.value.selectedThreadId?.let { threadId ->
                 conversationRepository.updateThreadConnector(threadId, agent)

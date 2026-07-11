@@ -1,6 +1,8 @@
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConnector } from "./connectors/AgentConnector.js";
+import type { HermesApi } from "./connectors/HermesApiClient.js";
+import type { PushNotifier } from "./push/PushNotifier.js";
 import { registerMessageRoute } from "./routes/message.js";
 import { buildServer } from "./server.js";
 
@@ -8,6 +10,7 @@ describe("AgentVoice relay", () => {
   beforeEach(() => {
     process.env.AGENTVOICE_INBOX_DB_PATH = ":memory:";
     delete process.env.AGENTVOICE_WEBHOOK_TOKEN;
+    delete process.env.AGENTVOICE_FIREBASE_ENABLED;
   });
 
   it("returns health status", async () => {
@@ -455,4 +458,253 @@ describe("AgentVoice relay", () => {
     });
     expect(response.json().requestId).toMatch(/^req_/);
   });
+
+  it("creates, lists, renames, and reads canonical Hermes threads", async () => {
+    const hermes = createFakeHermesApi();
+    const server = buildServer({ logger: false, hermesApi: hermes });
+
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { title: "Gym planning" }
+    });
+    expect(created.statusCode).toBe(201);
+    const threadId = created.json().id as string;
+
+    const list = await server.inject({ method: "GET", url: "/api/threads" });
+    expect(list.json().threads).toEqual([
+      expect.objectContaining({ id: threadId, title: "Gym planning" })
+    ]);
+
+    const renamed = await server.inject({
+      method: "PATCH",
+      url: `/api/threads/${threadId}`,
+      payload: { title: "Training block" }
+    });
+    expect(renamed.json()).toEqual({ id: threadId, title: "Training block" });
+
+    const history = await server.inject({
+      method: "GET",
+      url: `/api/threads/${threadId}/messages`
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json()).toMatchObject({
+      threadId,
+      messages: [
+        expect.objectContaining({ role: "assistant", content: "Canonical history" })
+      ]
+    });
+    await server.close();
+  });
+
+  it("starts one idempotent streaming run and reports completion", async () => {
+    const hermes = createFakeHermesApi();
+    const notify = vi.fn<PushNotifier["notify"]>(async () => {});
+    const server = buildServer({
+      logger: false,
+      hermesApi: hermes,
+      pushNotifier: { notify }
+    });
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { title: "Streaming" }
+    });
+    const threadId = created.json().id as string;
+    const payload = {
+      clientMessageId: "client-message-1",
+      content: "Tell me something",
+      mode: "normal"
+    };
+
+    const first = await server.inject({
+      method: "POST",
+      url: `/api/threads/${threadId}/messages`,
+      payload
+    });
+    const duplicate = await server.inject({
+      method: "POST",
+      url: `/api/threads/${threadId}/messages`,
+      payload
+    });
+    expect(first.statusCode).toBe(202);
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toMatchObject({
+      runId: first.json().runId,
+      duplicate: true
+    });
+
+    await vi.waitFor(async () => {
+      const run = await server.inject({
+        method: "GET",
+        url: `/api/runs/${first.json().runId}`
+      });
+      expect(run.json()).toMatchObject({
+        status: "completed",
+        replyText: "Streamed answer",
+        presentation: { mood: "happy" }
+      });
+    });
+    expect(hermes.streamMessage).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+    await server.close();
+  });
+
+  it("registers devices and deduplicates webhook delivery events", async () => {
+    process.env.AGENTVOICE_WEBHOOK_TOKEN = "test-token";
+    const notify = vi.fn<PushNotifier["notify"]>(async () => {});
+    const server = buildServer({
+      logger: false,
+      hermesApi: createFakeHermesApi(),
+      pushNotifier: { notify }
+    });
+    const device = await server.inject({
+      method: "POST",
+      url: "/api/devices/register",
+      payload: {
+        installationId: "phone-1",
+        fcmToken: "fcm-token",
+        platform: "android"
+      }
+    });
+    expect(device.statusCode).toBe(201);
+
+    const payload = {
+      eventId: "cron:job-1:run-1",
+      conversationId: "session-1",
+      content: "Scheduled ping",
+      source: "cron"
+    };
+    const first = await server.inject({
+      method: "POST",
+      url: "/api/webhook/receive",
+      headers: { "x-relay-token": "test-token" },
+      payload
+    });
+    const duplicate = await server.inject({
+      method: "POST",
+      url: "/api/webhook/receive",
+      headers: { "x-relay-token": "test-token" },
+      payload
+    });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().duplicate).toBe(false);
+    expect(duplicate.json()).toMatchObject({
+      id: first.json().id,
+      duplicate: true
+    });
+    expect(notify).toHaveBeenCalledTimes(1);
+    await server.close();
+  });
+
+  it("keeps canonical completion successful when push delivery fails", async () => {
+    const notify = vi.fn<PushNotifier["notify"]>(async () => {
+      throw new Error("Firebase unavailable");
+    });
+    const server = buildServer({
+      logger: false,
+      hermesApi: createFakeHermesApi(),
+      pushNotifier: { notify }
+    });
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { title: "Push isolation" }
+    });
+    const started = await server.inject({
+      method: "POST",
+      url: `/api/threads/${created.json().id}/messages`,
+      payload: {
+        clientMessageId: "client-message-push-failure",
+        content: "Complete even if push is down",
+        mode: "normal"
+      }
+    });
+
+    await vi.waitFor(async () => {
+      const run = await server.inject({
+        method: "GET",
+        url: `/api/runs/${started.json().runId}`
+      });
+      expect(run.json().status).toBe("completed");
+    });
+    await server.close();
+  });
+
+  it("accepts a stored webhook message when push delivery fails", async () => {
+    process.env.AGENTVOICE_WEBHOOK_TOKEN = "test-token";
+    const server = buildServer({
+      logger: false,
+      hermesApi: createFakeHermesApi(),
+      pushNotifier: {
+        notify: async () => {
+          throw new Error("Firebase unavailable");
+        }
+      }
+    });
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/webhook/receive",
+      headers: { "x-relay-token": "test-token" },
+      payload: {
+        eventId: "cron:push-failure",
+        conversationId: "session-push-failure",
+        content: "Stored before push",
+        source: "cron"
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ duplicate: false, status: "queued" });
+    await server.close();
+  });
 });
+
+function createFakeHermesApi(): HermesApi & { streamMessage: ReturnType<typeof vi.fn> } {
+  const sessions = new Map<string, { id: string; title: string; startedAt: number; messageCount: number }>();
+  let nextId = 1;
+  return {
+    enabled: true,
+    createSession: vi.fn(async (title: string) => {
+      const session = { id: `session-${nextId++}`, title, startedAt: 1_720_000_000, messageCount: 0 };
+      sessions.set(session.id, session);
+      return session;
+    }),
+    listSessions: vi.fn(async () => [...sessions.values()]),
+    renameSession: vi.fn(async (sessionId: string, title: string) => {
+      const current = sessions.get(sessionId)!;
+      const updated = { ...current, title };
+      sessions.set(sessionId, updated);
+      return updated;
+    }),
+    listMessages: vi.fn(async (sessionId: string) => [{
+      id: "message-1",
+      sessionId,
+      role: "assistant",
+      content: "Canonical history",
+      timestamp: 1_720_000_001
+    }]),
+    streamMessage: vi.fn(async (input) => {
+      input.onEvent({ type: "delta", text: "Streamed " });
+      input.onEvent({ type: "delta", text: "answer" });
+      input.onEvent({
+        type: "presentation",
+        presentation: {
+          mood: "happy",
+          intensity: 0.7,
+          state: "success",
+          motionHint: "celebrate"
+        }
+      });
+      return {
+        text: "Streamed answer",
+        presentation: {
+          mood: "happy" as const,
+          intensity: 0.7,
+          state: "success" as const,
+          motionHint: "celebrate" as const
+        }
+      };
+    })
+  };
+}

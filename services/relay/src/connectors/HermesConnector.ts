@@ -35,7 +35,7 @@ type OpenAiChatCompletionResponse = {
   }>;
 };
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MODEL = "hermes";
 const DEFAULT_USER = "agentvoice-mobile";
 

@@ -32,11 +32,12 @@ class AgentMessageNotifier(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun showMessage(title: String, text: String) {
+    fun showMessage(title: String, text: String, threadId: String? = null) {
         ensureChannel()
 
         val intent = Intent(context, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            threadId?.let { putExtra(EXTRA_THREAD_ID, it) }
         }
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -65,5 +66,6 @@ class AgentMessageNotifier(private val context: Context) {
         private const val CHANNEL_ID = "agentvoice_messages"
         private const val REQUEST_OPEN = 2101
         private const val NOTIFICATION_ID_BASE = 3000
+        const val EXTRA_THREAD_ID = "agentvoice_thread_id"
     }
 }

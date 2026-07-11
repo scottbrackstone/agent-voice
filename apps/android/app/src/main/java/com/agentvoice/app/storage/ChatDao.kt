@@ -40,6 +40,23 @@ interface ChatDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessageEntity)
 
+    @Query("DELETE FROM chat_messages WHERE threadId = :threadId")
+    suspend fun clearMessagesForThread(threadId: String)
+
+    @Query(
+        """
+        UPDATE chat_messages
+        SET status = :status, text = :text, error = :error
+        WHERE id = :messageId
+        """
+    )
+    suspend fun updateMessage(
+        messageId: String,
+        status: String,
+        text: String,
+        error: String?
+    )
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertDeletedThread(entity: DeletedThreadEntity)
 
@@ -73,6 +90,19 @@ interface ChatDao {
         """
     )
     suspend fun updateThreadMode(threadId: String, mode: String, updatedAtMillis: Long)
+
+    @Query(
+        """
+        UPDATE chat_threads
+        SET backgroundId = :backgroundId, updatedAtMillis = :updatedAtMillis
+        WHERE id = :threadId
+        """
+    )
+    suspend fun updateThreadBackground(
+        threadId: String,
+        backgroundId: String,
+        updatedAtMillis: Long
+    )
 
     @Query("UPDATE chat_threads SET updatedAtMillis = :updatedAtMillis WHERE id = :threadId")
     suspend fun touchThread(threadId: String, updatedAtMillis: Long)

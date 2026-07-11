@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChatMessageEntity::class,
         DeletedThreadEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class AgentVoiceDatabase : RoomDatabase() {
@@ -89,6 +89,27 @@ abstract class AgentVoiceDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DELETE FROM `chat_messages`")
+                db.execSQL("DELETE FROM `chat_threads`")
+                db.execSQL("DELETE FROM `deleted_chat_threads`")
+            }
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `chat_threads` ADD COLUMN `backgroundId` " +
+                        "TEXT NOT NULL DEFAULT 'sakura_signal'"
+                )
+                db.execSQL(
+                    "ALTER TABLE `chat_threads` ADD COLUMN `avatarModelId` " +
+                        "TEXT NOT NULL DEFAULT 'solara_static'"
+                )
+            }
+        }
+
         fun get(context: Context): AgentVoiceDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -98,6 +119,8 @@ abstract class AgentVoiceDatabase : RoomDatabase() {
                 )
                     .addMigrations(MIGRATION_1_2)
                     .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_4_5)
                     .build()
                     .also { instance = it }
             }

@@ -7,7 +7,7 @@ describe("HermesConnector", () => {
       enabled: false,
       model: "hermes",
       user: "agentvoice-test",
-      timeoutMs: 30_000
+      timeoutMs: 120_000
     });
 
     const response = await connector.sendMessage({
@@ -47,7 +47,7 @@ describe("HermesConnector", () => {
         token: "token",
         model: "hermes-agent",
         user: "agentvoice-test",
-        timeoutMs: 30_000
+        timeoutMs: 120_000
       },
       fetchImpl
     );

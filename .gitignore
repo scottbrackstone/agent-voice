@@ -6,6 +6,8 @@
 *.key
 *.p12
 *.jks
+google-services.json
+**/google-services.json
 local.properties
 
 # Android

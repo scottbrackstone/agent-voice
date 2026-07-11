@@ -1,20 +1,29 @@
 package com.agentvoice.app.network
 
 import com.agentvoice.app.model.AgentMode
+import com.agentvoice.app.model.AgentPresentation
 import com.agentvoice.app.model.AgentResponse
 import com.agentvoice.app.model.AgentStatus
 import com.agentvoice.app.model.ConnectorType
+import com.agentvoice.app.model.CanonicalMessage
+import com.agentvoice.app.model.CanonicalThread
+import com.agentvoice.app.model.MessageRunSnapshot
+import com.agentvoice.app.model.MessageRunStart
 import com.agentvoice.app.model.QueuedAction
 import com.agentvoice.app.model.QueuedActionStatus
 import com.agentvoice.app.model.QueuedActionType
 import com.agentvoice.app.model.RelayInboxMessage
+import com.agentvoice.app.model.RunStreamEvent
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.patch
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
@@ -22,6 +31,7 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import io.ktor.utils.io.readUTF8Line
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -202,6 +212,173 @@ class RelayClient(
         }
     }
 
+    suspend fun createCanonicalThread(
+        backendUrl: String,
+        title: String
+    ): Result<CanonicalThread> = jsonRequest(
+        timeoutMs = THREAD_TIMEOUT_MS,
+        timeoutMessage = "Timed out creating Hermes chat."
+    ) {
+        val response = client.post("${normalizeBackendUrl(backendUrl)}/api/threads") {
+            contentType(ContentType.Application.Json)
+            setBody(JSONObject().put("title", title).toString())
+        }
+        parseCanonicalThread(requireSuccessBody(response.status.value, response.body()))
+    }
+
+    suspend fun fetchCanonicalThreads(backendUrl: String): Result<List<CanonicalThread>> =
+        jsonRequest(
+            timeoutMs = THREAD_TIMEOUT_MS,
+            timeoutMessage = "Timed out loading Hermes chats."
+        ) {
+            val response = client.get("${normalizeBackendUrl(backendUrl)}/api/threads")
+            parseCanonicalThreads(requireSuccessBody(response.status.value, response.body()))
+        }
+
+    suspend fun renameCanonicalThread(
+        backendUrl: String,
+        threadId: String,
+        title: String
+    ): Result<CanonicalThread> = jsonRequest(
+        timeoutMs = THREAD_TIMEOUT_MS,
+        timeoutMessage = "Timed out renaming Hermes chat."
+    ) {
+        val response = client.patch(
+            "${normalizeBackendUrl(backendUrl)}/api/threads/${encodePath(threadId)}"
+        ) {
+            contentType(ContentType.Application.Json)
+            setBody(JSONObject().put("title", title).toString())
+        }
+        parseCanonicalThread(requireSuccessBody(response.status.value, response.body()))
+    }
+
+    suspend fun fetchCanonicalMessages(
+        backendUrl: String,
+        threadId: String,
+        limit: Int = 100
+    ): Result<List<CanonicalMessage>> = jsonRequest(
+        timeoutMs = THREAD_TIMEOUT_MS,
+        timeoutMessage = "Timed out loading Hermes messages."
+    ) {
+        val response = client.get(
+            "${normalizeBackendUrl(backendUrl)}/api/threads/${encodePath(threadId)}/messages" +
+                "?limit=${limit.coerceIn(1, 100)}"
+        )
+        parseCanonicalMessages(
+            body = requireSuccessBody(response.status.value, response.body()),
+            threadId = threadId
+        )
+    }
+
+    suspend fun startMessageRun(
+        backendUrl: String,
+        threadId: String,
+        clientMessageId: String,
+        content: String,
+        mode: AgentMode,
+        inputType: String
+    ): Result<MessageRunStart> = jsonRequest(
+        timeoutMs = THREAD_TIMEOUT_MS,
+        timeoutMessage = "Timed out starting Hermes response."
+    ) {
+        val response = client.post(
+            "${normalizeBackendUrl(backendUrl)}/api/threads/${encodePath(threadId)}/messages"
+        ) {
+            contentType(ContentType.Application.Json)
+            setBody(
+                JSONObject()
+                    .put("clientMessageId", clientMessageId)
+                    .put("content", content)
+                    .put("mode", mode.wireValue)
+                    .put("inputType", inputType)
+                    .toString()
+            )
+        }
+        parseRunStart(requireSuccessBody(response.status.value, response.body()))
+    }
+
+    suspend fun fetchMessageRun(
+        backendUrl: String,
+        runId: String
+    ): Result<MessageRunSnapshot> = jsonRequest(
+        timeoutMs = INBOX_TIMEOUT_MS,
+        timeoutMessage = "Timed out checking Hermes response."
+    ) {
+        val response = client.get(
+            "${normalizeBackendUrl(backendUrl)}/api/runs/${encodePath(runId)}"
+        )
+        parseRunSnapshot(requireSuccessBody(response.status.value, response.body()))
+    }
+
+    suspend fun streamRunEvents(
+        backendUrl: String,
+        runId: String,
+        onEvent: (RunStreamEvent) -> Unit
+    ): Result<Unit> {
+        return try {
+            client.prepareGet(
+                "${normalizeBackendUrl(backendUrl)}/api/runs/${encodePath(runId)}/events"
+            ).execute { response ->
+                if (!response.status.isSuccess()) {
+                    throw RelayClientException(
+                        "Run stream returned HTTP ${response.status.value}: ${response.body<String>().take(240)}"
+                    )
+                }
+                val channel = response.bodyAsChannel()
+                var eventName = "message"
+                val dataLines = mutableListOf<String>()
+                var finished = false
+                while (!finished && !channel.isClosedForRead) {
+                    val line = channel.readUTF8Line() ?: break
+                    when {
+                        line.startsWith("event:") -> eventName = line.substringAfter("event:").trim()
+                        line.startsWith("data:") -> dataLines += line.substringAfter("data:").trimStart()
+                        line.isBlank() -> {
+                            if (dataLines.isNotEmpty() && eventName != "heartbeat") {
+                                val event = parseRunEvent(eventName, dataLines.joinToString("\n"))
+                                if (event != null) {
+                                    onEvent(event)
+                                    finished = event is RunStreamEvent.Completed ||
+                                        event is RunStreamEvent.Failed ||
+                                        event is RunStreamEvent.Cancelled
+                                }
+                            }
+                            eventName = "message"
+                            dataLines.clear()
+                        }
+                    }
+                }
+            }
+            Result.success(Unit)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(toRelayError(error))
+        }
+    }
+
+    suspend fun registerDevice(
+        backendUrl: String,
+        installationId: String,
+        fcmToken: String
+    ): Result<Unit> = jsonRequest(
+        timeoutMs = INBOX_TIMEOUT_MS,
+        timeoutMessage = "Timed out registering notifications."
+    ) {
+        val response = client.post("${normalizeBackendUrl(backendUrl)}/api/devices/register") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                JSONObject()
+                    .put("installationId", installationId)
+                    .put("fcmToken", fcmToken)
+                    .put("platform", "android")
+                    .toString()
+            )
+        }
+        requireSuccessBody(response.status.value, response.body<String>())
+        Unit
+    }
+
     suspend fun transcribeAudio(
         backendUrl: String,
         audioBytes: ByteArray,
@@ -323,6 +500,127 @@ class RelayClient(
         }
     }
 
+    private suspend fun <T> jsonRequest(
+        timeoutMs: Long,
+        timeoutMessage: String,
+        block: suspend () -> T
+    ): Result<T> = try {
+        Result.success(withTimeout(timeoutMs) { block() })
+    } catch (error: TimeoutCancellationException) {
+        Result.failure(RelayClientException(timeoutMessage))
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        Result.failure(toRelayError(error))
+    }
+
+    private fun requireSuccessBody(status: Int, body: String): String {
+        if (status !in 200..299) {
+            val message = runCatching { JSONObject(body).optString("error") }.getOrNull()
+            throw RelayClientException(
+                message?.takeIf { it.isNotBlank() }
+                    ?: "Relay returned HTTP $status: ${body.take(240)}"
+            )
+        }
+        return body
+    }
+
+    private fun parseCanonicalThread(body: String): CanonicalThread {
+        val json = JSONObject(body)
+        val now = System.currentTimeMillis()
+        return CanonicalThread(
+            id = json.getString("id"),
+            title = json.optString("title", "New chat"),
+            createdAtMillis = parseFlexibleTimestamp(json.opt("createdAt"), now),
+            updatedAtMillis = parseFlexibleTimestamp(json.opt("updatedAt"), now),
+            messageCount = json.optInt("messageCount", 0)
+        )
+    }
+
+    private fun parseCanonicalThreads(body: String): List<CanonicalThread> {
+        val array = JSONObject(body).optJSONArray("threads") ?: return emptyList()
+        return (0 until array.length()).map { parseCanonicalThread(array.getJSONObject(it).toString()) }
+    }
+
+    private fun parseCanonicalMessages(body: String, threadId: String): List<CanonicalMessage> {
+        val array = JSONObject(body).optJSONArray("messages") ?: return emptyList()
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            CanonicalMessage(
+                id = item.getString("id"),
+                threadId = threadId,
+                role = item.optString("role", "system"),
+                content = item.optString("content"),
+                timestampMillis = parseFlexibleTimestamp(item.opt("timestamp"), System.currentTimeMillis()),
+                finishReason = item.optString("finishReason").ifBlank { null },
+                toolName = item.optString("toolName").ifBlank { null }
+            )
+        }
+    }
+
+    private fun parseRunStart(body: String): MessageRunStart {
+        val json = JSONObject(body)
+        return MessageRunStart(
+            runId = json.getString("runId"),
+            threadId = json.getString("threadId"),
+            clientMessageId = json.getString("clientMessageId"),
+            status = json.getString("status"),
+            duplicate = json.optBoolean("duplicate", false)
+        )
+    }
+
+    private fun parseRunSnapshot(body: String): MessageRunSnapshot {
+        val json = JSONObject(body)
+        return MessageRunSnapshot(
+            id = json.getString("id"),
+            sessionId = json.getString("sessionId"),
+            clientMessageId = json.getString("clientMessageId"),
+            status = json.getString("status"),
+            replyText = json.optString("replyText"),
+            error = json.optString("error").ifBlank { null },
+            presentation = parsePresentation(json.optJSONObject("presentation"))
+        )
+    }
+
+    private fun parseRunEvent(eventName: String, body: String): RunStreamEvent? {
+        val json = JSONObject(body)
+        return when (eventName) {
+            "run.started" -> RunStreamEvent.Started(json.optString("runId"))
+            "reply.delta" -> RunStreamEvent.Delta(json.optString("text"))
+            "tool.progress" -> RunStreamEvent.ToolProgress(
+                label = json.optString("label", json.optString("tool", "Working")),
+                status = json.optString("status", "running")
+            )
+            "presentation" -> RunStreamEvent.Presentation(
+                parsePresentation(json.optJSONObject("presentation"))
+            )
+            "reply.completed" -> RunStreamEvent.Completed(
+                text = json.optString("text"),
+                presentation = parsePresentation(json.optJSONObject("presentation"))
+            )
+            "run.failed" -> RunStreamEvent.Failed(json.optString("error", "Hermes run failed."))
+            "run.cancelled" -> RunStreamEvent.Cancelled
+            else -> null
+        }
+    }
+
+    private fun parsePresentation(json: JSONObject?): AgentPresentation = AgentPresentation(
+        mood = json?.optString("mood", "neutral") ?: "neutral",
+        intensity = (json?.optDouble("intensity", 0.0) ?: 0.0).toFloat().coerceIn(0f, 1f),
+        state = json?.optString("state", "idle") ?: "idle",
+        motionHint = json?.optString("motionHint", "idle") ?: "idle"
+    )
+
+    private fun parseFlexibleTimestamp(value: Any?, fallback: Long): Long = when (value) {
+        is Number -> if (value.toDouble() < 10_000_000_000.0) {
+            (value.toDouble() * 1000).toLong()
+        } else {
+            value.toLong()
+        }
+        is String -> runCatching { Instant.parse(value).toEpochMilli() }.getOrDefault(fallback)
+        else -> fallback
+    }
+
     private fun JSONArray?.toQueuedActions(): List<QueuedAction> {
         if (this == null) {
             return emptyList()
@@ -391,6 +689,7 @@ class RelayClient(
         private const val COMMAND_CATALOG_TIMEOUT_MS = 8_000L
         private const val INBOX_TIMEOUT_MS = 8_000L
         private const val TRANSCRIBE_TIMEOUT_MS = 90_000L
+        private const val THREAD_TIMEOUT_MS = 15_000L
     }
 }
 
