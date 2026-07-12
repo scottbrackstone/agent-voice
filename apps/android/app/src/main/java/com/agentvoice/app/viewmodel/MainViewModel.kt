@@ -19,7 +19,10 @@ import com.agentvoice.app.model.QueuedActionStatus
 import com.agentvoice.app.model.RunStreamEvent
 import com.agentvoice.app.model.ChatMessageStatus
 import com.agentvoice.app.model.ChatBackground
+import com.agentvoice.app.model.ThreadCreationPolicy
+import com.agentvoice.app.model.ThreadTitlePolicy
 import com.agentvoice.app.network.RelayClient
+import com.agentvoice.app.network.RelayClientException
 import com.agentvoice.app.storage.ConversationRepository
 import com.agentvoice.app.storage.SettingsRepository
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +38,7 @@ data class MainUiState(
     val mode: AgentMode = AgentMode.Normal,
     val isListening: Boolean = false,
     val isLoading: Boolean = false,
+    val isCreatingThread: Boolean = false,
     val isTestingConnection: Boolean = false,
     val transcript: String = "",
     val agentReply: String = "",
@@ -86,6 +90,7 @@ data class MainUiState(
     val showThreadActions: Boolean = false,
     val showDeleteThreadConfirmation: Boolean = false,
     val activeMessageActionId: String? = null,
+    val selectedMessageIds: Set<String> = emptySet(),
     val commandCatalog: CommandCatalog = CommandCatalog.Empty,
     val commandSuggestions: List<HermesCommand> = emptyList(),
     val activeCommand: HermesCommand? = null,
@@ -110,7 +115,8 @@ data class MainUiState(
     val showSettings: Boolean = false,
     val isDrivingMode: Boolean = false,
     val appVersion: String = "unknown",
-    val lastTranscript: String? = null
+    val lastTranscript: String? = null,
+    val pendingThreadCreateId: String? = null
 ) {
     val canRetry: Boolean
         get() = !isLoading && errorMessage != null && !lastTranscript.isNullOrBlank()
@@ -131,6 +137,12 @@ data class MainUiState(
 
     val activeMessageAction: ChatMessage?
         get() = activeThreadMessages.firstOrNull { it.id == activeMessageActionId }
+
+    val selectedMessages: List<ChatMessage>
+        get() = activeThreadMessages.filter { it.id in selectedMessageIds }
+
+    val isMessageSelectionMode: Boolean
+        get() = selectedMessageIds.isNotEmpty()
 
     val activeCommandStep
         get() = activeCommand?.steps?.getOrNull(activeCommandStepIndex)
@@ -154,6 +166,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var commandCatalogBackendUrl: String? = null
     private var inboxSyncInFlight = false
     private var canonicalSyncInFlight = false
+    private val autoTitleThreadsInFlight = mutableSetOf<String>()
     private var pendingDeviceRegistration: Pair<String, String>? = null
     private var registeredDeviceKey: String? = null
 
@@ -314,7 +327,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selectedHistory = null,
                 showThreadActions = false,
                 activeThreadActionId = null,
-                activeMessageActionId = null
+                activeMessageActionId = null,
+                selectedMessageIds = emptySet()
             )
         }
     }
@@ -380,32 +394,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createThread() {
         val state = _uiState.value
-        viewModelScope.launch {
-            if (state.selectedAgent == ConnectorType.Hermes) {
-                _uiState.update { it.copy(isLoading = true, connectionStatus = "Creating Hermes chat") }
+        if (state.selectedAgent == ConnectorType.Hermes) {
+            val clientThreadId = ThreadCreationPolicy.requestId(
+                isCreating = state.isCreatingThread,
+                pendingRequestId = state.pendingThreadCreateId,
+                generatedRequestId = UUID.randomUUID().toString()
+            ) ?: return
+            _uiState.update {
+                it.copy(
+                    isCreatingThread = true,
+                    pendingThreadCreateId = clientThreadId,
+                    connectionStatus = "Creating Hermes chat",
+                    errorMessage = null
+                )
+            }
+            viewModelScope.launch {
                 relayClient.createCanonicalThread(
                     backendUrl = state.backendUrl,
-                    title = ConversationRepository.DEFAULT_THREAD_TITLE
+                    clientThreadId = clientThreadId
                 ).onSuccess { canonical ->
                     val thread = conversationRepository.upsertCanonicalThread(canonical, state.mode)
                     activateThread(thread, openChat = true)
-                    _uiState.update { it.copy(isLoading = false, connectionStatus = "Hermes chat ready") }
+                    _uiState.update {
+                        it.copy(
+                            isCreatingThread = false,
+                            pendingThreadCreateId = null,
+                            connectionStatus = "Hermes chat ready",
+                            errorMessage = null
+                        )
+                    }
                 }.onFailure { error ->
                     _uiState.update {
                         it.copy(
-                            isLoading = false,
-                            connectionStatus = "Unable to create chat",
-                            errorMessage = error.message ?: "Unable to create Hermes chat."
+                            isCreatingThread = false,
+                            connectionStatus = "Chat not created",
+                            errorMessage = error.message ?: "Unable to create Hermes chat.",
+                            lastRelayErrorMessage = error.message
                         )
                     }
                 }
-            } else {
+            }
+        } else {
+            viewModelScope.launch {
                 val thread = conversationRepository.createThread(
                     title = ConversationRepository.DEFAULT_THREAD_TITLE,
                     connector = state.selectedAgent,
                     mode = state.mode
                 )
                 activateThread(thread, openChat = true)
+                _uiState.update { it.copy(pendingThreadCreateId = null, errorMessage = null) }
             }
         }
     }
@@ -555,6 +592,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(activeMessageActionId = null) }
     }
 
+    fun startMessageSelection(message: ChatMessage) {
+        _uiState.update {
+            it.copy(
+                activeMessageActionId = null,
+                selectedMessageIds = setOf(message.id)
+            )
+        }
+    }
+
+    fun toggleMessageSelection(message: ChatMessage) {
+        _uiState.update {
+            val next = if (message.id in it.selectedMessageIds) {
+                it.selectedMessageIds - message.id
+            } else {
+                it.selectedMessageIds + message.id
+            }
+            it.copy(selectedMessageIds = next)
+        }
+    }
+
+    fun clearMessageSelection() {
+        _uiState.update { it.copy(selectedMessageIds = emptySet()) }
+    }
+
     fun openCommandPicker(command: HermesCommand) {
         if (command.steps.isEmpty()) {
             completeCommand(command, emptyMap())
@@ -674,7 +735,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val shouldSendImmediately = command.sendMode == COMMAND_SEND_IMMEDIATELY
         _uiState.update {
             it.copy(
-                typedMessage = if (shouldSendImmediately) it.typedMessage else renderedCommand,
+                typedMessage = if (shouldSendImmediately) "" else renderedCommand,
                 activeCommand = null,
                 activeCommandStepIndex = 0,
                 commandSelections = emptyMap(),
@@ -1176,7 +1237,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val thread = snapshot.selectedThreadId?.let { conversationRepository.getThread(it) }
                 ?: relayClient.createCanonicalThread(
                     backendUrl = snapshot.backendUrl,
-                    title = ConversationRepository.DEFAULT_THREAD_TITLE
+                    clientThreadId = UUID.randomUUID().toString()
                 ).getOrElse { error ->
                     finishCanonicalFailure(error.message ?: "Unable to create Hermes chat.")
                     return@launch
@@ -1188,6 +1249,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val clientMessageId = "client_${UUID.randomUUID()}"
             conversationRepository.saveCanonicalUserMessage(thread.id, clientMessageId, transcript)
+            if (
+                thread.title == ConversationRepository.DEFAULT_THREAD_TITLE &&
+                !transcript.trimStart().startsWith("/") &&
+                autoTitleThreadsInFlight.add(thread.id)
+            ) {
+                viewModelScope.launch {
+                    try {
+                        autoTitleCanonicalThread(
+                            threadId = thread.id,
+                            text = transcript,
+                            backendUrl = snapshot.backendUrl
+                        )
+                    } finally {
+                        autoTitleThreadsInFlight.remove(thread.id)
+                    }
+                }
+            }
             val run = relayClient.startMessageRun(
                 backendUrl = snapshot.backendUrl,
                 threadId = thread.id,
@@ -1316,6 +1394,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private suspend fun autoTitleCanonicalThread(
+        threadId: String,
+        text: String,
+        backendUrl: String
+    ) {
+        val candidates = ThreadTitlePolicy.candidates(
+            text = text,
+            threadId = threadId,
+            fallback = ConversationRepository.DEFAULT_THREAD_TITLE
+        )
+
+        for (candidate in candidates) {
+            val result = relayClient.renameCanonicalThread(backendUrl, threadId, candidate)
+            result.onSuccess {
+                conversationRepository.renameThread(threadId, candidate)
+                return
+            }
+            val error = result.exceptionOrNull()
+            if (error !is RelayClientException || error.statusCode != 409) {
+                _uiState.update { it.copy(lastRelayErrorMessage = error?.message) }
+                return
             }
         }
     }
@@ -1730,7 +1833,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 queuedActions = if (isChangingThread) emptyList() else it.queuedActions,
                 warnings = if (isChangingThread) emptyList() else it.warnings,
                 selectedHistory = null,
-                errorMessage = null
+                errorMessage = null,
+                selectedMessageIds = emptySet(),
+                activeMessageActionId = null
             )
         }
     }

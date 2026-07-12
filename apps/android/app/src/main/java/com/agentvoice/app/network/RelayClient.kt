@@ -214,14 +214,22 @@ class RelayClient(
 
     suspend fun createCanonicalThread(
         backendUrl: String,
-        title: String
+        clientThreadId: String,
+        title: String? = null
     ): Result<CanonicalThread> = jsonRequest(
         timeoutMs = THREAD_TIMEOUT_MS,
         timeoutMessage = "Timed out creating Hermes chat."
     ) {
         val response = client.post("${normalizeBackendUrl(backendUrl)}/api/threads") {
             contentType(ContentType.Application.Json)
-            setBody(JSONObject().put("title", title).toString())
+            setBody(
+                JSONObject()
+                    .put("clientThreadId", clientThreadId)
+                    .apply {
+                        title?.trim()?.takeIf { it.isNotBlank() }?.let { put("title", it) }
+                    }
+                    .toString()
+            )
         }
         parseCanonicalThread(requireSuccessBody(response.status.value, response.body()))
     }
@@ -516,10 +524,22 @@ class RelayClient(
 
     private fun requireSuccessBody(status: Int, body: String): String {
         if (status !in 200..299) {
-            val message = runCatching { JSONObject(body).optString("error") }.getOrNull()
+            val errorBody = runCatching { JSONObject(body) }.getOrNull()
+            val message = errorBody
+                ?.optString("detail")
+                ?.takeIf { it.isNotBlank() }
+                ?: errorBody?.optString("error")?.takeIf { it.isNotBlank() }
+            val requestId = errorBody?.optString("requestId")?.takeIf { it.isNotBlank() }
+            val code = errorBody?.optString("code")?.takeIf { it.isNotBlank() }
+            val displayMessage = buildString {
+                append(message ?: "Relay returned HTTP $status: ${body.take(240)}")
+                requestId?.let { append(" (request $it)") }
+            }
             throw RelayClientException(
-                message?.takeIf { it.isNotBlank() }
-                    ?: "Relay returned HTTP $status: ${body.take(240)}"
+                message = displayMessage,
+                statusCode = status,
+                requestId = requestId,
+                code = code
             )
         }
         return body
@@ -531,6 +551,8 @@ class RelayClient(
         return CanonicalThread(
             id = json.getString("id"),
             title = json.optString("title", "New chat"),
+            isUntitled = json.optBoolean("isUntitled", false),
+            duplicate = json.optBoolean("duplicate", false),
             createdAtMillis = parseFlexibleTimestamp(json.opt("createdAt"), now),
             updatedAtMillis = parseFlexibleTimestamp(json.opt("updatedAt"), now),
             messageCount = json.optInt("messageCount", 0)
@@ -693,4 +715,9 @@ class RelayClient(
     }
 }
 
-class RelayClientException(message: String) : Exception(message)
+class RelayClientException(
+    message: String,
+    val statusCode: Int? = null,
+    val requestId: String? = null,
+    val code: String? = null
+) : Exception(message)

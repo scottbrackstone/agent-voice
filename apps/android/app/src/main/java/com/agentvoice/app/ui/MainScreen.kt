@@ -35,10 +35,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
@@ -61,6 +59,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -95,6 +94,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -112,7 +112,12 @@ import com.agentvoice.app.model.ChatThread
 import com.agentvoice.app.model.ConversationRecord
 import com.agentvoice.app.model.QueuedAction
 import com.agentvoice.app.viewmodel.MainUiState
-import com.agentvoice.app.ui.presentation.SolaraStaticRenderer
+import com.agentvoice.app.ui.commands.CommandPanel
+import com.agentvoice.app.ui.commands.CommandSuggestionPanel
+import com.agentvoice.app.ui.components.MessageActionSheet
+import com.agentvoice.app.ui.components.ThreadActionSheet
+import com.agentvoice.app.ui.presentation.SolaraSpriteRenderer
+import com.agentvoice.app.ui.presentation.resolveCompanionVisualState
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
@@ -142,6 +147,9 @@ fun MainScreen(
     onSaveThreadTitle: () -> Unit,
     onCancelRenameThread: () -> Unit,
     onMessageLongPress: (ChatMessage) -> Unit,
+    onStartMessageSelection: (ChatMessage) -> Unit,
+    onToggleMessageSelection: (ChatMessage) -> Unit,
+    onClearMessageSelection: () -> Unit,
     onCloseMessageActions: () -> Unit,
     onCommandSelected: (HermesCommand) -> Unit,
     onCommandOptionSelected: (CommandOption) -> Unit,
@@ -187,7 +195,24 @@ fun MainScreen(
             onTtsToggle = onTtsToggle,
             onSettingsClick = onSettingsClick,
             onMessageLongPress = onMessageLongPress,
+            onMessageClick = onToggleMessageSelection,
+            onClearMessageSelection = onClearMessageSelection,
+            onCopySelectedMessages = {
+                copyToClipboard(
+                    context = context,
+                    clipboardManager = clipboardManager,
+                    label = "Messages",
+                    text = copyableMessagesText(uiState.selectedMessages)
+                )
+                onClearMessageSelection()
+            },
             onCommandSelected = onCommandSelected,
+            onCommandOptionSelected = onCommandOptionSelected,
+            onCommandTextChange = onCommandTextChange,
+            onSubmitCommandText = onSubmitCommandText,
+            onSkipCommandText = onSkipCommandText,
+            onCommandBack = onCommandBack,
+            onCancelCommandPicker = onCancelCommandPicker,
             modifier = modifier
         )
     }
@@ -225,6 +250,7 @@ fun MainScreen(
     uiState.activeMessageAction?.let { message ->
         MessageActionSheet(
             message = message,
+            previewText = visibleMessageText(message),
             onCopyMessage = {
                 copyToClipboard(
                     context = context,
@@ -234,6 +260,7 @@ fun MainScreen(
                 )
                 onCloseMessageActions()
             },
+            onSelectMessages = { onStartMessageSelection(message) },
             onCopyFromHere = {
                 val selectedIndex = uiState.activeThreadMessages.indexOfFirst {
                     it.id == message.id
@@ -261,21 +288,6 @@ fun MainScreen(
         )
     }
 
-    uiState.activeCommand?.let { command ->
-        CommandPickerSheet(
-            command = command,
-            step = uiState.activeCommandStep,
-            options = uiState.activeCommandOptions,
-            textDraft = uiState.commandTextDraft,
-            pickerError = uiState.commandPickerError,
-            onOptionSelected = onCommandOptionSelected,
-            onTextChange = onCommandTextChange,
-            onSubmitText = onSubmitCommandText,
-            onSkipText = onSkipCommandText,
-            onBack = onCommandBack,
-            onDismiss = onCancelCommandPicker
-        )
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -330,8 +342,20 @@ fun ThreadListScreen(
                     status = uiState.lastConnector?.let { "Last reply via ${it.label}" }
                         ?: "Ready",
                     isActive = uiState.isListening || uiState.isLoading,
+                    isCreatingThread = uiState.isCreatingThread,
+                    isRetry = uiState.pendingThreadCreateId != null && !uiState.isCreatingThread,
                     onNewThreadClick = onNewThreadClick
                 )
+            }
+
+            if (uiState.pendingThreadCreateId != null && uiState.errorMessage != null) {
+                item {
+                    ErrorStrip(
+                        body = uiState.errorMessage,
+                        canRetry = !uiState.isCreatingThread,
+                        onRetry = onNewThreadClick
+                    )
+                }
             }
 
             item {
@@ -340,7 +364,10 @@ fun ThreadListScreen(
 
             if (uiState.threads.isEmpty()) {
                 item {
-                    EmptyThreadList(onNewThreadClick = onNewThreadClick)
+                    EmptyThreadList(
+                        isCreatingThread = uiState.isCreatingThread,
+                        onNewThreadClick = onNewThreadClick
+                    )
                 }
             } else {
                 items(uiState.threads, key = { it.id }) { thread ->
@@ -391,7 +418,16 @@ fun ChatScreen(
     onTtsToggle: (Boolean) -> Unit,
     onSettingsClick: () -> Unit,
     onMessageLongPress: (ChatMessage) -> Unit,
+    onMessageClick: (ChatMessage) -> Unit,
+    onClearMessageSelection: () -> Unit,
+    onCopySelectedMessages: () -> Unit,
     onCommandSelected: (HermesCommand) -> Unit,
+    onCommandOptionSelected: (CommandOption) -> Unit,
+    onCommandTextChange: (String) -> Unit,
+    onSubmitCommandText: () -> Unit,
+    onSkipCommandText: () -> Unit,
+    onCommandBack: () -> Unit,
+    onCancelCommandPicker: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val selectedThread = uiState.selectedThread
@@ -399,7 +435,23 @@ fun ChatScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            if (uiState.isMessageSelectionMode) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onClearMessageSelection) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel message selection")
+                        }
+                    },
+                    title = {
+                        Text("${uiState.selectedMessageIds.size} selected", fontWeight = FontWeight.Bold)
+                    },
+                    actions = {
+                        IconButton(onClick = onCopySelectedMessages) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy selected messages")
+                        }
+                    }
+                )
+            } else TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBackToThreads) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Threads")
@@ -442,13 +494,33 @@ fun ChatScreen(
             )
         },
         bottomBar = {
-            ComposerBar(
-                uiState = uiState,
-                onTalkClick = onTalkClick,
-                onTypedMessageChange = onTypedMessageChange,
-                onSendTypedMessage = onSendTypedMessage,
-                onCommandSelected = onCommandSelected
-            )
+            Column {
+                val command = uiState.activeCommand
+                val step = uiState.activeCommandStep
+                if (command != null && step != null) {
+                    CommandPanel(
+                        command = command,
+                        step = step,
+                        stepIndex = uiState.activeCommandStepIndex,
+                        options = uiState.activeCommandOptions,
+                        textDraft = uiState.commandTextDraft,
+                        pickerError = uiState.commandPickerError,
+                        onOptionSelected = onCommandOptionSelected,
+                        onTextChange = onCommandTextChange,
+                        onSubmitText = onSubmitCommandText,
+                        onSkipText = onSkipCommandText,
+                        onBack = onCommandBack,
+                        onDismiss = onCancelCommandPicker
+                    )
+                }
+                ComposerBar(
+                    uiState = uiState,
+                    onTalkClick = onTalkClick,
+                    onTypedMessageChange = onTypedMessageChange,
+                    onSendTypedMessage = onSendTypedMessage,
+                    onCommandSelected = onCommandSelected
+                )
+            }
         },
         modifier = modifier.fillMaxSize()
     ) { innerPadding ->
@@ -481,6 +553,9 @@ fun ChatScreen(
                 MessageList(
                     messages = uiState.activeThreadMessages,
                     isBusy = uiState.isLoading || uiState.isListening || uiState.isTranscribingVoiceClip,
+                    selectedMessageIds = uiState.selectedMessageIds,
+                    selectionMode = uiState.isMessageSelectionMode,
+                    onMessageClick = onMessageClick,
                     onMessageLongPress = onMessageLongPress
                 )
             }
@@ -587,51 +662,82 @@ private fun BackgroundPickerSheet(
     onSelected: (ChatBackground) -> Unit,
     onDismiss: () -> Unit
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF151326)
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
                 "Chat atmosphere",
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFF8F4FF)
             )
-            ChatBackground.entries.forEach { background ->
-                val swatch = when (background) {
-                    ChatBackground.SakuraSignal -> Color(0xFFFF79B0)
-                    ChatBackground.NeonBloom -> Color(0xFF3FD9C7)
-                    ChatBackground.ElectricDawn -> Color(0xFFFFD166)
-                    ChatBackground.MidnightArcade -> Color(0xFF45357A)
-                }
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onSelected(background) },
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (background.id == selectedId) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    }
+            ChatBackground.entries.chunked(2).forEach { pair ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Box(
+                    pair.forEach { background ->
+                        val selected = background.id == selectedId
+                        Surface(
                             modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(swatch)
-                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
-                        )
-                        Text(background.label, modifier = Modifier.weight(1f))
-                        if (background.id == selectedId) {
-                            Icon(Icons.Default.Check, contentDescription = "Selected")
+                                .weight(1f)
+                                .height(118.dp)
+                                .then(
+                                    if (selected) {
+                                        Modifier.border(
+                                            2.dp,
+                                            Color(0xFFFFD166),
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                                .clickable { onSelected(background) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = Color.Transparent
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                ChatBackdrop(background.id)
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        .background(Color(0xDD151326))
+                                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        background.label,
+                                        color = Color(0xFFF8F4FF),
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                if (selected) {
+                                    Surface(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(8.dp),
+                                        shape = CircleShape,
+                                        color = Color(0xFFFFD166)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = Color(0xFF171331),
+                                            modifier = Modifier.padding(4.dp).size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -645,6 +751,8 @@ private fun BackgroundPickerSheet(
 private fun CompanionHeader(
     status: String,
     isActive: Boolean,
+    isCreatingThread: Boolean,
+    isRetry: Boolean,
     onNewThreadClick: () -> Unit
 ) {
     Surface(
@@ -657,7 +765,7 @@ private fun CompanionHeader(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            CompanionAvatar(isActive = isActive, size = 82.dp)
+            CompanionAvatar(isActive = isActive, size = 104.dp)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -677,19 +785,39 @@ private fun CompanionHeader(
             }
             Button(
                 onClick = onNewThreadClick,
+                enabled = !isCreatingThread,
                 shape = RoundedCornerShape(8.dp),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = null)
+                if (isCreatingThread) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        if (isRetry) Icons.Default.Refresh else Icons.Default.Add,
+                        contentDescription = null
+                    )
+                }
                 Spacer(Modifier.size(8.dp))
-                Text("New")
+                Text(
+                    when {
+                        isCreatingThread -> "Creating"
+                        isRetry -> "Retry"
+                        else -> "New"
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun EmptyThreadList(onNewThreadClick: () -> Unit) {
+private fun EmptyThreadList(
+    isCreatingThread: Boolean,
+    onNewThreadClick: () -> Unit
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -707,10 +835,21 @@ private fun EmptyThreadList(onNewThreadClick: () -> Unit) {
                 tint = MaterialTheme.colorScheme.primary
             )
             Text("No threads yet.", style = MaterialTheme.typography.bodyMedium)
-            OutlinedButton(onClick = onNewThreadClick, shape = RoundedCornerShape(8.dp)) {
-                Icon(Icons.Default.Add, contentDescription = null)
+            OutlinedButton(
+                onClick = onNewThreadClick,
+                enabled = !isCreatingThread,
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                if (isCreatingThread) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                }
                 Spacer(Modifier.size(8.dp))
-                Text("Create thread")
+                Text(if (isCreatingThread) "Creating" else "Create thread")
             }
         }
     }
@@ -793,8 +932,10 @@ private fun ChatStatusHeader(
             ) {
                 CompanionAvatar(
                     isActive = uiState.isLoading || uiState.isListening || uiState.isSpeaking,
-                    size = 72.dp,
-                    presentation = uiState.presentation
+                    size = 96.dp,
+                    presentation = uiState.presentation,
+                    isListening = uiState.isListening,
+                    isSpeaking = uiState.isSpeaking || uiState.streamingReply.isNotBlank()
                 )
                 Column(
                     modifier = Modifier.weight(1f),
@@ -873,6 +1014,9 @@ private fun SafetyNotice() {
 private fun MessageList(
     messages: List<ChatMessage>,
     isBusy: Boolean,
+    selectedMessageIds: Set<String>,
+    selectionMode: Boolean,
+    onMessageClick: (ChatMessage) -> Unit,
     onMessageLongPress: (ChatMessage) -> Unit
 ) {
     val listState = rememberLazyListState()
@@ -929,7 +1073,16 @@ private fun MessageList(
                     ) {
                         MessageBubble(
                             message = message,
-                            onLongClick = { onMessageLongPress(message) }
+                            selected = message.id in selectedMessageIds,
+                            selectionMode = selectionMode,
+                            onClick = { onMessageClick(message) },
+                            onLongClick = {
+                                if (selectionMode) {
+                                    onMessageClick(message)
+                                } else {
+                                    onMessageLongPress(message)
+                                }
+                            }
                         )
                     }
                 }
@@ -983,7 +1136,7 @@ private fun EmptyChatState(isBusy: Boolean) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            CompanionAvatar(isActive = isBusy, size = 92.dp)
+            CompanionAvatar(isActive = isBusy, size = 112.dp)
             Text(
                 if (isBusy) "Thinking..." else "Start a thread.",
                 style = MaterialTheme.typography.titleMedium,
@@ -997,6 +1150,9 @@ private fun EmptyChatState(isBusy: Boolean) {
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
+    selected: Boolean,
+    selectionMode: Boolean,
+    onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
     val isUser = message.role == ChatMessageRole.User
@@ -1019,8 +1175,26 @@ private fun MessageBubble(
         Surface(
             modifier = Modifier
                 .widthIn(max = 312.dp)
+                .then(
+                    if (selected) {
+                        Modifier.border(
+                            width = 2.dp,
+                            color = SoftGold,
+                            shape = RoundedCornerShape(
+                                topStart = 8.dp,
+                                topEnd = 8.dp,
+                                bottomStart = if (isUser) 8.dp else 2.dp,
+                                bottomEnd = if (isUser) 2.dp else 8.dp
+                            )
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
                 .combinedClickable(
-                    onClick = {},
+                    onClick = {
+                        if (selectionMode) onClick()
+                    },
                     onLongClick = onLongClick
                 ),
             shape = RoundedCornerShape(
@@ -1036,6 +1210,19 @@ private fun MessageBubble(
                 modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                if (selected) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = "Selected",
+                            tint = contentColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
                 Text(
                     visibleMessageText(message),
                     style = MaterialTheme.typography.bodyLarge,
@@ -1068,6 +1255,8 @@ private fun ComposerBar(
     onSendTypedMessage: () -> Unit,
     onCommandSelected: (HermesCommand) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
+
     Surface(
         tonalElevation = 3.dp,
         color = MaterialTheme.colorScheme.surface
@@ -1087,9 +1276,12 @@ private fun ComposerBar(
             }
 
             if (uiState.commandSuggestions.isNotEmpty()) {
-                CommandSuggestionBar(
+                CommandSuggestionPanel(
                     commands = uiState.commandSuggestions,
-                    onCommandSelected = onCommandSelected
+                    onCommandSelected = { command ->
+                        focusManager.clearFocus(force = true)
+                        onCommandSelected(command)
+                    }
                 )
             }
 
@@ -1174,11 +1366,17 @@ private fun MicPulseButton(
 private fun CompanionAvatar(
     isActive: Boolean,
     size: androidx.compose.ui.unit.Dp,
-    presentation: AgentPresentation = AgentPresentation()
+    presentation: AgentPresentation = AgentPresentation(),
+    isListening: Boolean = false,
+    isSpeaking: Boolean = false
 ) {
-    SolaraStaticRenderer.Render(
-        presentation = presentation,
-        active = isActive,
+    SolaraSpriteRenderer.Render(
+        state = resolveCompanionVisualState(
+            presentation = presentation,
+            isListening = isListening,
+            isSpeaking = isSpeaking,
+            isActive = isActive
+        ),
         size = size,
         modifier = Modifier
     )
@@ -1230,75 +1428,6 @@ private fun QueuedActionPanel(actions: List<QueuedAction>) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
-@Composable
-private fun CommandSuggestionBar(
-    commands: List<HermesCommand>,
-    onCommandSelected: (HermesCommand) -> Unit
-) {
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        commands.forEach { command ->
-            FilterChip(
-                selected = false,
-                onClick = { onCommandSelected(command) },
-                label = {
-                    Text(
-                        command.name,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ThreadActionSheet(
-    thread: ChatThread,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                thread.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            TextButton(
-                onClick = onRename,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Edit, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Rename chat")
-            }
-            TextButton(
-                onClick = onDelete,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Delete from this app")
-            }
-            Spacer(Modifier.height(14.dp))
-        }
-    }
-}
-
 @Composable
 private fun DeleteThreadDialog(
     thread: ChatThread,
@@ -1326,216 +1455,6 @@ private fun DeleteThreadDialog(
             }
         }
     )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun MessageActionSheet(
-    message: ChatMessage,
-    onCopyMessage: () -> Unit,
-    onCopyFromHere: () -> Unit,
-    onCopyThread: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                "Message",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                visibleMessageText(message),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
-            )
-            TextButton(
-                onClick = onCopyMessage,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Copy message")
-            }
-            TextButton(
-                onClick = onCopyFromHere,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Copy from here")
-            }
-            TextButton(
-                onClick = onCopyThread,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Copy whole thread")
-            }
-            Spacer(Modifier.height(14.dp))
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CommandPickerSheet(
-    command: HermesCommand,
-    step: com.agentvoice.app.commands.CommandStep?,
-    options: List<CommandOption>,
-    textDraft: String,
-    pickerError: String?,
-    onOptionSelected: (CommandOption) -> Unit,
-    onTextChange: (String) -> Unit,
-    onSubmitText: () -> Unit,
-    onSkipText: () -> Unit,
-    onBack: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                command.label,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-            if (command.description.isNotBlank()) {
-                Text(
-                    command.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Text(
-                step?.label ?: "Choose",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold
-            )
-            if (step?.type == "text") {
-                OutlinedTextField(
-                    value = textDraft,
-                    onValueChange = onTextChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = step.placeholder?.let { placeholder ->
-                        { Text(placeholder) }
-                    },
-                    singleLine = true,
-                    isError = pickerError != null
-                )
-                pickerError?.let { error ->
-                    Text(
-                        error,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    if (step.required.not()) {
-                        OutlinedButton(
-                            onClick = onSkipText,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Text("Skip")
-                        }
-                    }
-                    Button(
-                        onClick = onSubmitText,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp),
-                        enabled = step.required.not() || textDraft.isNotBlank()
-                    ) {
-                        Text("Continue")
-                    }
-                }
-            } else {
-                if (options.isEmpty()) {
-                    Text(
-                        "No options available for this step.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    options.forEach { option ->
-                        Button(
-                            onClick = { onOptionSelected(option) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                if (option.selected) {
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    Text(option.label)
-                                    option.description?.let { description ->
-                                        Text(
-                                            description,
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                if (command.steps.indexOf(step) > 0) {
-                    OutlinedButton(
-                        onClick = onBack,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = null)
-                        Spacer(Modifier.size(8.dp))
-                        Text("Back")
-                    }
-                }
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = null)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Cancel")
-                }
-            }
-            Spacer(Modifier.height(14.dp))
-        }
-    }
 }
 
 @Composable

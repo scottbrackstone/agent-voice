@@ -1,6 +1,6 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { HermesApi } from "../connectors/HermesApiClient.js";
+import type { HermesApi, HermesSession } from "../connectors/HermesApiClient.js";
 import { HermesApiError } from "../connectors/HermesApiClient.js";
 import { messageToWire, type RelayInbox } from "../db/inbox.js";
 import type { RunCoordinator } from "../runs/RunCoordinator.js";
@@ -8,7 +8,10 @@ import { AgentModeSchema } from "../types/agent.js";
 import { createRequestId } from "../utils/requestId.js";
 
 const ThreadParams = z.object({ sessionId: z.string().trim().min(1) });
-const CreateThreadBody = z.object({ title: z.string().trim().min(1).max(100).default("New chat") });
+const CreateThreadBody = z.object({
+  title: z.string().trim().min(1).max(100).optional(),
+  clientThreadId: z.string().uuid().optional()
+});
 const RenameThreadBody = z.object({ title: z.string().trim().min(1).max(100) });
 const HistoryQuery = z.object({
   before: z.coerce.number().positive().optional(),
@@ -39,6 +42,7 @@ export function registerThreadsRoute(
           return {
             id: thread.sessionId,
             title: session?.title ?? thread.title,
+            isUntitled: session?.isUntitled ?? thread.title === DEFAULT_THREAD_TITLE,
             createdAt: session?.startedAt ?? thread.createdAt,
             updatedAt: session?.endedAt ?? thread.updatedAt,
             messageCount: session?.messageCount ?? 0
@@ -46,25 +50,53 @@ export function registerThreadsRoute(
         })
       });
     } catch (error) {
-      return sendHermesError(reply, error);
+      return sendHermesError(server.log, reply, error);
     }
   });
 
   server.post("/api/threads", async (request, reply) => {
-    const parsed = CreateThreadBody.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: "Invalid thread title", requestId: createRequestId() });
+    const requestId = createRequestId();
+    const parsed = CreateThreadBody.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid thread title", requestId });
+    const requestedTitle = parsed.data.title === DEFAULT_THREAD_TITLE
+      ? undefined
+      : parsed.data.title;
+    const requestedSessionId = parsed.data.clientThreadId
+      ? `agentvoice_${parsed.data.clientThreadId}`
+      : undefined;
     try {
-      const session = await hermes.createSession(parsed.data.title);
+      let duplicate = false;
+      let session: HermesSession;
+      try {
+        session = await hermes.createSession({
+          id: requestedSessionId,
+          title: requestedTitle
+        });
+      } catch (error) {
+        if (
+          error instanceof HermesApiError &&
+          error.statusCode === 409 &&
+          error.code === "session_exists" &&
+          requestedSessionId
+        ) {
+          session = await hermes.getSession(requestedSessionId);
+          duplicate = true;
+        } else {
+          throw error;
+        }
+      }
       store.registerThread(session.id, session.title);
-      return reply.status(201).send({
+      return reply.status(duplicate ? 200 : 201).send({
         id: session.id,
         title: session.title,
+        isUntitled: session.isUntitled,
+        duplicate,
         createdAt: session.startedAt ?? Date.now() / 1000,
         updatedAt: session.endedAt ?? session.startedAt ?? Date.now() / 1000,
         messageCount: session.messageCount ?? 0
       });
     } catch (error) {
-      return sendHermesError(reply, error);
+      return sendHermesError(server.log, reply, error, requestId);
     }
   });
 
@@ -78,7 +110,7 @@ export function registerThreadsRoute(
       store.registerThread(session.id, session.title);
       return reply.send({ id: session.id, title: session.title });
     } catch (error) {
-      return sendHermesError(reply, error);
+      return sendHermesError(server.log, reply, error);
     }
   });
 
@@ -120,7 +152,7 @@ export function registerThreadsRoute(
         hasMore: messages.length === query.data.limit
       });
     } catch (error) {
-      return sendHermesError(reply, error);
+      return sendHermesError(server.log, reply, error);
     }
   });
 
@@ -145,10 +177,34 @@ export function registerThreadsRoute(
   });
 }
 
-function sendHermesError(reply: { status(code: number): { send(value: unknown): unknown } }, error: unknown): unknown {
-  const requestId = createRequestId();
+const DEFAULT_THREAD_TITLE = "New chat";
+
+function sendHermesError(
+  logger: FastifyBaseLogger,
+  reply: { status(code: number): { send(value: unknown): unknown } },
+  error: unknown,
+  requestId = createRequestId()
+): unknown {
   if (error instanceof HermesApiError) {
-    return reply.status(error.statusCode).send({ error: error.message, detail: error.detail, requestId });
+    const statusCode = error.code === "invalid_title" && error.detail?.includes("already in use")
+      ? 409
+      : error.statusCode;
+    logger.warn({
+      requestId,
+      upstreamStatus: error.statusCode,
+      errorCode: error.code,
+      detail: error.detail
+    }, "Hermes API request failed");
+    return reply.status(statusCode).send({
+      error: error.message,
+      code: error.code,
+      detail: error.detail,
+      requestId
+    });
   }
+  logger.warn({
+    requestId,
+    error: error instanceof Error ? error.message : "Hermes request failed."
+  }, "Hermes API request failed");
   return reply.status(502).send({ error: error instanceof Error ? error.message : "Hermes request failed.", requestId });
 }

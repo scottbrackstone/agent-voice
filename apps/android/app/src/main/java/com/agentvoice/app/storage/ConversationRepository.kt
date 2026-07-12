@@ -15,6 +15,7 @@ import com.agentvoice.app.model.CanonicalThread
 import com.agentvoice.app.model.ConnectorType
 import com.agentvoice.app.model.ConversationRecord
 import com.agentvoice.app.model.RelayInboxMessage
+import com.agentvoice.app.model.ThreadTitlePolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.util.UUID
@@ -371,19 +372,13 @@ class ConversationRepository(context: Context) {
 
         chatDao.renameThread(
             threadId = threadId,
-            title = titleFromMessage(text),
+            title = suggestThreadTitle(text),
             updatedAtMillis = now
         )
     }
 
-    private fun titleFromMessage(text: String): String {
-        val normalized = text
-            .trim()
-            .replace(Regex("\\s+"), " ")
-
-        return normalized
-            .take(MAX_TITLE_LENGTH)
-            .ifBlank { DEFAULT_THREAD_TITLE }
+    fun suggestThreadTitle(text: String): String {
+        return ThreadTitlePolicy.suggest(text, DEFAULT_THREAD_TITLE)
     }
 
     private fun responseDetails(response: AgentResponse): String {
@@ -396,6 +391,5 @@ class ConversationRepository(context: Context) {
 
     companion object {
         const val DEFAULT_THREAD_TITLE = "New chat"
-        private const val MAX_TITLE_LENGTH = 42
     }
 }

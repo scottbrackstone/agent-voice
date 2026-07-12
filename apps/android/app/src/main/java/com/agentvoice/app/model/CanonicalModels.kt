@@ -3,6 +3,8 @@ package com.agentvoice.app.model
 data class CanonicalThread(
     val id: String,
     val title: String,
+    val isUntitled: Boolean = false,
+    val duplicate: Boolean = false,
     val createdAtMillis: Long,
     val updatedAtMillis: Long,
     val messageCount: Int
@@ -55,4 +57,3 @@ sealed interface RunStreamEvent {
     data class Failed(val error: String) : RunStreamEvent
     data object Cancelled : RunStreamEvent
 }
-

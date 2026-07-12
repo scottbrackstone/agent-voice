@@ -12,6 +12,53 @@ const config = (timeoutMs = 120_000): HermesConfig => ({
 });
 
 describe("HermesApiClient", () => {
+  it("creates an untitled session with a deterministic ID", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      capturedUrl = String(input);
+      capturedInit = init;
+      return new Response(JSON.stringify({
+        object: "hermes.session",
+        session: {
+          id: "agentvoice_123",
+          source: "api_server",
+          title: null,
+          started_at: 1_720_000_000,
+          message_count: 0
+        }
+      }), { status: 201, headers: { "Content-Type": "application/json" } });
+    };
+    const client = new HermesApiClient(config(), fetchImpl);
+
+    const session = await client.createSession({ id: "agentvoice_123" });
+
+    expect(capturedUrl).toBe("http://127.0.0.1:8642/api/sessions");
+    expect(JSON.parse(String(capturedInit?.body))).toEqual({ id: "agentvoice_123" });
+    expect(session).toMatchObject({
+      id: "agentvoice_123",
+      title: "New chat",
+      isUntitled: true,
+      startedAt: 1_720_000_000
+    });
+  });
+
+  it("preserves Hermes error codes and safe messages", async () => {
+    const fetchImpl: typeof fetch = async () => new Response(JSON.stringify({
+      error: {
+        message: "Title 'Gym planning' is already in use by session session-1",
+        code: "invalid_title"
+      }
+    }), { status: 400, headers: { "Content-Type": "application/json" } });
+    const client = new HermesApiClient(config(), fetchImpl);
+
+    await expect(client.createSession({ title: "Gym planning" })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "invalid_title",
+      detail: "Title 'Gym planning' is already in use by session session-1"
+    });
+  });
+
   it("scopes scheduled delivery to the active AgentVoice session", async () => {
     let capturedInit: RequestInit | undefined;
     const fetchImpl: typeof fetch = async (_input, init) => {
