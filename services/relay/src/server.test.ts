@@ -1,7 +1,12 @@
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConnector } from "./connectors/AgentConnector.js";
-import type { HermesApi } from "./connectors/HermesApiClient.js";
+import { HermesApiError } from "./connectors/HermesApiClient.js";
+import type {
+  CreateHermesSessionInput,
+  HermesApi,
+  HermesSession
+} from "./connectors/HermesApiClient.js";
 import type { PushNotifier } from "./push/PushNotifier.js";
 import { registerMessageRoute } from "./routes/message.js";
 import { buildServer } from "./server.js";
@@ -497,6 +502,75 @@ describe("AgentVoice relay", () => {
     await server.close();
   });
 
+  it("creates multiple untitled threads from the legacy New chat title", async () => {
+    const hermes = createFakeHermesApi();
+    const server = buildServer({ logger: false, hermesApi: hermes });
+
+    const first = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { title: "New chat" }
+    });
+    const second = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { title: "New chat" }
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(201);
+    expect(first.json()).toMatchObject({ title: "New chat", isUntitled: true, duplicate: false });
+    expect(second.json()).toMatchObject({ title: "New chat", isUntitled: true, duplicate: false });
+    expect(second.json().id).not.toBe(first.json().id);
+    expect(hermes.createSession).toHaveBeenNthCalledWith(1, { id: undefined, title: undefined });
+    expect(hermes.createSession).toHaveBeenNthCalledWith(2, { id: undefined, title: undefined });
+    await server.close();
+  });
+
+  it("returns the same thread when a client create ID is retried", async () => {
+    const hermes = createFakeHermesApi();
+    const server = buildServer({ logger: false, hermesApi: hermes });
+    const payload = { clientThreadId: "123e4567-e89b-12d3-a456-426614174000" };
+
+    const first = await server.inject({ method: "POST", url: "/api/threads", payload });
+    const retry = await server.inject({ method: "POST", url: "/api/threads", payload });
+
+    expect(first.statusCode).toBe(201);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toMatchObject({
+      id: first.json().id,
+      isUntitled: true,
+      duplicate: true
+    });
+    expect(hermes.getSession).toHaveBeenCalledWith(
+      "agentvoice_123e4567-e89b-12d3-a456-426614174000"
+    );
+    await server.close();
+  });
+
+  it("returns a conflict and request ID for a duplicate custom title", async () => {
+    const server = buildServer({ logger: false, hermesApi: createFakeHermesApi() });
+
+    await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { title: "Gym planning" }
+    });
+    const conflict = await server.inject({
+      method: "POST",
+      url: "/api/threads",
+      payload: { title: "Gym planning" }
+    });
+
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({
+      code: "invalid_title",
+      detail: expect.stringContaining("already in use")
+    });
+    expect(conflict.json().requestId).toMatch(/^req_/);
+    await server.close();
+  });
+
   it("starts one idempotent streaming run and reports completion", async () => {
     const hermes = createFakeHermesApi();
     const notify = vi.fn<PushNotifier["notify"]>(async () => {});
@@ -661,19 +735,42 @@ describe("AgentVoice relay", () => {
 });
 
 function createFakeHermesApi(): HermesApi & { streamMessage: ReturnType<typeof vi.fn> } {
-  const sessions = new Map<string, { id: string; title: string; startedAt: number; messageCount: number }>();
+  const sessions = new Map<string, HermesSession>();
   let nextId = 1;
   return {
     enabled: true,
-    createSession: vi.fn(async (title: string) => {
-      const session = { id: `session-${nextId++}`, title, startedAt: 1_720_000_000, messageCount: 0 };
+    createSession: vi.fn(async (input: CreateHermesSessionInput = {}) => {
+      const id = input.id ?? `session-${nextId++}`;
+      if (sessions.has(id)) {
+        throw new HermesApiError(
+          `Session already exists: ${id}`,
+          409,
+          `Session already exists: ${id}`,
+          "session_exists"
+        );
+      }
+      const titleConflict = input.title
+        ? [...sessions.values()].find((session) => session.title === input.title)
+        : undefined;
+      if (titleConflict) {
+        const detail = `Title '${input.title}' is already in use by session ${titleConflict.id}`;
+        throw new HermesApiError(detail, 400, detail, "invalid_title");
+      }
+      const session = {
+        id,
+        title: input.title ?? "New chat",
+        isUntitled: input.title == null,
+        startedAt: 1_720_000_000,
+        messageCount: 0
+      };
       sessions.set(session.id, session);
       return session;
     }),
+    getSession: vi.fn(async (sessionId: string) => sessions.get(sessionId)!),
     listSessions: vi.fn(async () => [...sessions.values()]),
     renameSession: vi.fn(async (sessionId: string, title: string) => {
       const current = sessions.get(sessionId)!;
-      const updated = { ...current, title };
+      const updated = { ...current, title, isUntitled: false };
       sessions.set(sessionId, updated);
       return updated;
     }),

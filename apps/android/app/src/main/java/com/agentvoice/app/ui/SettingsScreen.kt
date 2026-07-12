@@ -1,5 +1,7 @@
 package com.agentvoice.app.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -15,9 +17,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
+import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -31,6 +36,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -64,6 +73,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var diagnosticsExpanded by remember { mutableStateOf(false) }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -84,8 +95,9 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Backend URL", fontWeight = FontWeight.SemiBold)
+            SettingsSectionHeader("Connection")
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Relay address", fontWeight = FontWeight.SemiBold)
                 OutlinedTextField(
                     value = uiState.backendUrlDraft,
                     onValueChange = onBackendUrlChange,
@@ -103,7 +115,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Default.Save, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
-                        Text("Save")
+                        Text("Save relay")
                     }
                     OutlinedButton(
                         onClick = onTestConnection,
@@ -112,7 +124,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
-                        Text("Test")
+                        Text("Test link")
                     }
                 }
                 if (uiState.isTestingConnection) {
@@ -136,38 +148,10 @@ fun SettingsScreen(
                 onAgentSelected = onAgentSelected
             )
 
+            Divider()
+            SettingsSectionHeader("Voice")
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Test prompts", fontWeight = FontWeight.SemiBold)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = onSendHermesTestPrompt,
-                        enabled = !uiState.isLoading,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Hermes")
-                    }
-                    OutlinedButton(
-                        onClick = onSendMockTestPrompt,
-                        enabled = !uiState.isLoading,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Mock")
-                    }
-                }
-                OutlinedButton(
-                    onClick = onSendOpenClawTestPrompt,
-                    enabled = !uiState.isLoading,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("OpenClaw")
-                }
-            }
-
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Driving shortcuts", fontWeight = FontWeight.SemiBold)
+                Text("Quick Settings voice launch", fontWeight = FontWeight.SemiBold)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -176,13 +160,13 @@ fun SettingsScreen(
                         onClick = onShowDrivingNotification,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Show")
+                        Text("Enable")
                     }
                     OutlinedButton(
                         onClick = onHideDrivingNotification,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Hide")
+                        Text("Disable")
                     }
                 }
                 uiState.shortcutStatusMessage?.let { message ->
@@ -228,29 +212,92 @@ fun SettingsScreen(
                 onDrivingModeSelected = onDrivingModeSelected
             )
 
+            Divider()
+            SettingsSectionHeader("Appearance")
+            SettingValue("Visual theme", "Neon signal")
+            SettingValue("Companion", "Animated Solara")
             SettingValue("Default mode", uiState.mode.label)
             SettingValue("TTS", if (uiState.ttsEnabled) "enabled" else "disabled")
-            SettingValue(
-                "Driving STT",
-                if (uiState.drivingUseVoxtralTranscription) "Voxtral" else "Android"
-            )
-            SettingValue("App version", uiState.appVersion)
-            SettingValue("Last connector", uiState.lastConnector?.label ?: "none")
-            SettingValue("Last request", uiState.lastRequestId ?: "none")
-            SettingValue("Last error", uiState.lastErrorMessage ?: "none")
-            SettingValue("Last speech error", uiState.lastSpeechErrorMessage ?: "none")
-            SettingValue("Last relay error", uiState.lastRelayErrorMessage ?: "none")
-            SettingValue("Last voice command", uiState.lastVoiceCommand ?: "none")
-            SettingValue("Last ignored speech", uiState.lastIgnoredTranscript ?: "none")
-            SettingValue("Hands-free recoveries", uiState.handsFreeRecoveryCount.toString())
 
-            Button(
-                onClick = onClearHistory,
-                modifier = Modifier.fillMaxWidth()
+            Divider()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { diagnosticsExpanded = !diagnosticsExpanded }
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Delete, contentDescription = null)
-                Spacer(Modifier.size(8.dp))
-                Text("Clear local history")
+                SettingsSectionHeader("Diagnostics")
+                Icon(
+                    if (diagnosticsExpanded) {
+                        Icons.Default.KeyboardArrowUp
+                    } else {
+                        Icons.Default.KeyboardArrowDown
+                    },
+                    contentDescription = if (diagnosticsExpanded) {
+                        "Collapse diagnostics"
+                    } else {
+                        "Expand diagnostics"
+                    }
+                )
+            }
+            AnimatedVisibility(visible = diagnosticsExpanded) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("Connector tests", fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Button(
+                            onClick = onSendHermesTestPrompt,
+                            enabled = !uiState.isLoading,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Hermes")
+                        }
+                        OutlinedButton(
+                            onClick = onSendMockTestPrompt,
+                            enabled = !uiState.isLoading,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Mock")
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onSendOpenClawTestPrompt,
+                        enabled = !uiState.isLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("OpenClaw")
+                    }
+
+                    SettingValue(
+                        "Driving STT",
+                        if (uiState.drivingUseVoxtralTranscription) "Voxtral" else "Android"
+                    )
+                    SettingValue("App version", uiState.appVersion)
+                    SettingValue("Last connector", uiState.lastConnector?.label ?: "none")
+                    SettingValue("Last request", uiState.lastRequestId ?: "none")
+                    SettingValue("Last error", uiState.lastErrorMessage ?: "none")
+                    SettingValue("Last speech error", uiState.lastSpeechErrorMessage ?: "none")
+                    SettingValue("Last relay error", uiState.lastRelayErrorMessage ?: "none")
+                    SettingValue("Last voice command", uiState.lastVoiceCommand ?: "none")
+                    SettingValue("Last ignored speech", uiState.lastIgnoredTranscript ?: "none")
+                    SettingValue("Hands-free recoveries", uiState.handsFreeRecoveryCount.toString())
+
+                    OutlinedButton(
+                        onClick = onClearHistory,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Clear local history")
+                    }
+                }
             }
 
             uiState.errorMessage?.let { error ->
@@ -262,6 +309,16 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+@Composable
+private fun SettingsSectionHeader(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)

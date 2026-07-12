@@ -4,9 +4,15 @@ import { readHermesConfig, type HermesConfig } from "./HermesConnector.js";
 export type HermesSession = {
   id: string;
   title: string;
+  isUntitled: boolean;
   startedAt?: number;
   endedAt?: number;
   messageCount?: number;
+};
+
+export type CreateHermesSessionInput = {
+  id?: string;
+  title?: string;
 };
 
 export type HermesHistoryMessage = {
@@ -42,7 +48,8 @@ export type StreamMessageInput = {
 
 export interface HermesApi {
   readonly enabled: boolean;
-  createSession(title: string): Promise<HermesSession>;
+  createSession(input?: CreateHermesSessionInput): Promise<HermesSession>;
+  getSession(sessionId: string): Promise<HermesSession>;
   listSessions(): Promise<HermesSession[]>;
   renameSession(sessionId: string, title: string): Promise<HermesSession>;
   listMessages(sessionId: string, options?: { before?: number; limit?: number }): Promise<HermesHistoryMessage[]>;
@@ -66,10 +73,20 @@ export class HermesApiClient implements HermesApi {
     this.enabled = config.enabled;
   }
 
-  async createSession(title: string): Promise<HermesSession> {
+  async createSession(input: CreateHermesSessionInput = {}): Promise<HermesSession> {
+    const body: Record<string, string> = {};
+    if (input.id) body.id = input.id;
+    if (input.title) body.title = input.title;
     const json = await this.requestJson("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ title })
+      body: JSON.stringify(body)
+    });
+    return parseSession(json);
+  }
+
+  async getSession(sessionId: string): Promise<HermesSession> {
+    const json = await this.requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "GET"
     });
     return parseSession(json);
   }
@@ -229,13 +246,31 @@ export class HermesApiClient implements HermesApi {
       });
       const body = await response.text();
       if (!response.ok) {
+        const upstreamError = parseHermesErrorBody(body);
         throw new HermesApiError(
-          `Hermes returned HTTP ${response.status}.`,
+          upstreamError.message ?? `Hermes returned HTTP ${response.status}.`,
           response.status,
-          body.trim().slice(0, 500)
+          upstreamError.message ?? body.trim().slice(0, 500),
+          upstreamError.code
         );
       }
       return safeJson(body);
+    } catch (error) {
+      if (error instanceof HermesApiError) throw error;
+      if (controller.signal.aborted) {
+        throw new HermesApiError(
+          `Hermes did not respond within ${Math.max(1, Math.round(this.config.timeoutMs / 1000))} seconds.`,
+          504,
+          undefined,
+          "hermes_timeout"
+        );
+      }
+      throw new HermesApiError(
+        "Unable to reach Hermes.",
+        502,
+        error instanceof Error ? error.message : undefined,
+        "hermes_unreachable"
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -269,7 +304,8 @@ export class HermesApiError extends Error {
   constructor(
     message: string,
     readonly statusCode: number,
-    readonly detail?: string
+    readonly detail?: string,
+    readonly code?: string
   ) {
     super(message);
   }
@@ -280,13 +316,28 @@ function parseSession(value: unknown): HermesSession {
   const record = root.session && typeof root.session === "object" ? asRecord(root.session) : root;
   const id = stringValue(record.id) ?? stringValue(record.session_id);
   if (!id) throw new HermesApiError("Hermes session response did not include an ID.", 502);
+  const title = stringValue(record.title);
   return {
     id,
-    title: stringValue(record.title) ?? "New chat",
+    title: title ?? "New chat",
+    isUntitled: title == null,
     startedAt: numberValue(record.started_at),
     endedAt: numberValue(record.ended_at),
     messageCount: numberValue(record.message_count)
   };
+}
+
+function parseHermesErrorBody(value: string): { message?: string; code?: string } {
+  try {
+    const root = asRecord(JSON.parse(value));
+    const nested = asRecord(root.error);
+    return {
+      message: stringValue(nested.message) ?? stringValue(root.message),
+      code: stringValue(nested.code) ?? stringValue(root.code)
+    };
+  } catch {
+    return {};
+  }
 }
 
 function parseHistoryMessage(value: unknown, fallbackSessionId: string): HermesHistoryMessage {
