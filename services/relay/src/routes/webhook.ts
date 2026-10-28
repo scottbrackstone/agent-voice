@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { tokensMatch } from "../auth/relayAuth.js";
 import { RelayInbox } from "../db/inbox.js";
 import type { PushNotifier } from "../push/PushNotifier.js";
 import { createRequestId } from "../utils/requestId.js";
@@ -9,7 +10,7 @@ const WebhookSchema = z.object({
   conversationId: z.string().trim().min(1),
   content: z.string().trim().min(1),
   source: z.string().trim().min(1).default("cron"),
-  metadata: z.record(z.unknown()).default({})
+  metadata: z.record(z.string(), z.unknown()).default({})
 });
 
 export function registerWebhookRoute(
@@ -28,7 +29,7 @@ export function registerWebhookRoute(
       });
     }
 
-    if (request.headers["x-relay-token"] !== expectedToken) {
+    if (!tokensMatch(request.headers["x-relay-token"], expectedToken)) {
       return reply.status(401).send({
         error: "Unauthorized",
         requestId

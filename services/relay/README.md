@@ -16,6 +16,19 @@ npm run build
 npm test
 ```
 
+## Access token
+
+Set `AGENTVOICE_RELAY_TOKEN` whenever the relay listens on anything other than `127.0.0.1` (the default `HOST` is `0.0.0.0`). Every route except `/health` and the webhook then needs the token, and the relay logs a warning at startup if it is bound wide without one.
+
+```bash
+export AGENTVOICE_RELAY_TOKEN="$(openssl rand -hex 32)"
+
+curl "http://localhost:3001/api/messages?conversationId=thread-abc123" \
+  -H "Authorization: Bearer $AGENTVOICE_RELAY_TOKEN"
+```
+
+The Android app sends the same token when `agentvoice.relayToken` is set in `apps/android/local.properties`. The `curl` examples below omit the header for brevity.
+
 ## Endpoints
 
 Health:
