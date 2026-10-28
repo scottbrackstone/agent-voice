@@ -14,6 +14,7 @@ import { buildServer } from "./server.js";
 describe("AgentVoice relay", () => {
   beforeEach(() => {
     process.env.AGENTVOICE_INBOX_DB_PATH = ":memory:";
+    delete process.env.AGENTVOICE_RELAY_TOKEN;
     delete process.env.AGENTVOICE_WEBHOOK_TOKEN;
     delete process.env.AGENTVOICE_FIREBASE_ENABLED;
   });

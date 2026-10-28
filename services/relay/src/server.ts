@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
+import { registerRelayAuth } from "./auth/relayAuth.js";
 import { HermesConnector } from "./connectors/HermesConnector.js";
 import { HermesApiClient, type HermesApi } from "./connectors/HermesApiClient.js";
 import { MockConnector } from "./connectors/MockConnector.js";
@@ -42,6 +43,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   );
   const runs = new RunCoordinator(inbox, hermesApi, pushNotifier, server.log);
 
+  registerRelayAuth(server);
   registerHealthRoute(server);
   registerCommandsRoute(server);
   registerMessagesRoute(server, inbox);
