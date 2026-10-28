@@ -9,7 +9,7 @@ const WebhookSchema = z.object({
   conversationId: z.string().trim().min(1),
   content: z.string().trim().min(1),
   source: z.string().trim().min(1).default("cron"),
-  metadata: z.record(z.unknown()).default({})
+  metadata: z.record(z.string(), z.unknown()).default({})
 });
 
 export function registerWebhookRoute(
